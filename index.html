@@ -325,6 +325,7 @@ return maplibregl$1;
         <p class="sub">Get loop suggestions from home or wherever you are, matched to your distance and how hilly you want it. Save the ones you like and pick one before a run.</p>
         <div class="card">
           <h3>Suggest a loop</h3>
+          <div id="plannerTop">
           <label style="margin-top:10px">Start from</label>
           <div class="seg" id="startSeg">
             <button data-smode="gps" class="on">📍 Here</button>
@@ -332,7 +333,15 @@ return maplibregl$1;
             <button data-smode="pick">👆 Pick on map</button>
           </div>
           <div class="row small" style="margin-top:8px;min-height:22px"><span class="muted" id="startInfo" style="flex:1"></span><button class="go2 hidden" id="btnSetHome">Save as Home</button></div>
+          </div>
           <div class="planmap" id="planMap"><div class="map-msg" id="planMsg"></div></div>
+          <div id="editBar" class="hidden" style="background:var(--panel2);border:1px solid var(--accent);border-radius:12px;padding:12px;margin:-2px 0 12px">
+            <div class="row" style="align-items:flex-start"><b style="flex:1;min-width:0">✏️ Editing <span id="editName"></span></b><span class="small" id="editStats" style="white-space:nowrap"></span></div>
+            <p class="tiny muted" style="margin:6px 0 10px">Drag the white dots to reshape the route, and it re-routes along real paths. Tap the line to add a dot, tap a dot to remove it. The green dot is start/finish.</p>
+            <div class="small muted" id="editStatus" style="min-height:18px;margin-bottom:8px"></div>
+            <div class="controls"><button class="btn btn-ghost btn-sm" id="editUndo" disabled>↶ Undo</button><button class="btn btn-ghost btn-sm" id="editCancel">Cancel</button><button class="btn btn-start btn-sm" id="editSave" style="flex:1">Save</button></div>
+          </div>
+          <div id="plannerControls">
           <div class="field"><label for="rDist" id="rDistLbl">Distance (km)</label><input id="rDist" type="number" min="1" max="50" step="0.5" value="5" inputmode="decimal"></div>
           <div class="field"><label>Terrain</label><div class="seg" id="terrSeg"><button data-terrain="any" class="on" title="Ignore hills, just match the distance">Any</button><button data-terrain="flat">Flat</button><button data-terrain="rolling">Rolling</button><button data-terrain="hilly">Hilly</button></div></div>
           <div class="field">
@@ -350,6 +359,7 @@ return maplibregl$1;
           <button class="btn btn-start" id="btnSuggest" style="width:100%">✨ Suggest routes</button>
           <div class="small muted" id="suggestStatus" style="margin-top:10px"></div>
           <div id="suggestions"></div>
+          </div>
           <p class="tiny muted" style="margin:12px 0 0">Routes: <a href="https://valhalla.openstreetmap.de" target="_blank" rel="noopener">Valhalla</a> / OSRM by FOSSGIS, from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap</a> contributors (ODbL). Elevation: <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener">Mapzen Terrain Tiles</a> on AWS Open Data (SRTM, 3DEP, GMTED, ETOPO1). Suggestions follow mapped paths, so check they're safe and open before you run.</p>
         </div>
         <div class="card" id="routeLib"></div>
@@ -413,7 +423,7 @@ return maplibregl$1;
           </ul>
         </div>
         <button class="btn btn-ghost" id="btnWipe" style="width:100%;color:var(--danger)">Delete all data on this device</button>
-        <p class="small muted" id="buildInfo" style="text-align:center;margin:20px 0 0;opacity:.55;font-size:11px">Running Mate · build 2026-11-05 14:11 UTC</p>
+        <p class="small muted" id="buildInfo" style="text-align:center;margin:20px 0 0;opacity:.55;font-size:11px">Running Mate · build 2026-11-05 14:37 UTC</p>
       </div>
     </section>
   </main>
@@ -1612,15 +1622,25 @@ async function valhallaRoute(points, useHills){
   const res = await politeFetch('https://valhalla1.openstreetmap.de/route?json=' + encodeURIComponent(JSON.stringify(req)));
   let j = null; try{ j = await res.json(); }catch{}
   if(!res.ok || !j || !j.trip){ const e = new Error((j && (j.error || j.status_message)) || ('Routing server error ' + res.status)); e.status = res.status; throw e; }
-  const coords = j.trip.legs.flatMap((l, i) => { const c = decodePolyline(l.shape, 6); return i ? c.slice(1) : c; });
-  return { coords, distance: j.trip.summary.length * 1000, engine: 'Valhalla' };
+  const legs = j.trip.legs.map(l => decodePolyline(l.shape, 6));
+  const coords = legs.flatMap((c, i) => i ? c.slice(1) : c);
+  return { coords, legs, distance: j.trip.summary.length * 1000, engine: 'Valhalla' };
 }
 async function osrmRoute(points){
   const c = points.map(p => p[0].toFixed(6) + ',' + p[1].toFixed(6)).join(';');
   const res = await politeFetch(`https://routing.openstreetmap.de/routed-foot/route/v1/driving/${c}?overview=full&geometries=polyline6`);
   const j = await res.json();
   if(j.code !== 'Ok' || !j.routes || !j.routes[0]) throw new Error(j.message || 'Routing failed');
-  return { coords: decodePolyline(j.routes[0].geometry, 6), distance: j.routes[0].distance, engine: 'OSRM' };
+  const coords = decodePolyline(j.routes[0].geometry, 6);
+  // split the full geometry into legs at the (snapped) intermediate waypoints
+  const legs = []; let from = 0;
+  for(const wp of (j.waypoints || []).slice(1, -1)){
+    let bi = from, bd = Infinity;
+    for(let i = from; i < coords.length; i++){ const d = hav(coords[i], wp.location); if(d < bd){ bd = d; bi = i; } }
+    legs.push(coords.slice(from, bi + 1)); from = bi;
+  }
+  legs.push(coords.slice(from));
+  return { coords, legs, distance: j.routes[0].distance, engine: 'OSRM' };
 }
 let useOsrmOnly = false;
 async function routeVia(points, useHills){
@@ -2046,11 +2066,15 @@ function openRoutesView(){
       planMap.addSource('cands', { type:'geojson', data: EMPTY_FC });
       planMap.addLayer({ id:'cands-casing', type:'line', source:'cands', layout:{'line-join':'round','line-cap':'round'}, paint:{ 'line-color':'#111', 'line-width':['case',['get','sel'],9,5], 'line-opacity':['case',['get','sel'],.55,.25] } });
       planMap.addLayer({ id:'cands-line', type:'line', source:'cands', layout:{'line-join':'round','line-cap':'round'}, paint:{ 'line-color':['get','color'], 'line-width':['case',['get','sel'],5,3], 'line-opacity':['case',['get','sel'],1,.55] } });
+      planMap.addLayer({ id:'cands-hit', type:'line', source:'cands', paint:{ 'line-color':'#000', 'line-width':24, 'line-opacity':0.01 } });
       planMap.addSource('xings', { type:'geojson', data: EMPTY_FC });
       planMap.addLayer({ id:'xings', type:'circle', source:'xings', paint:{ 'circle-radius':7, 'circle-color':['match',['get','kind'],'rail','#ff9f1a','#ff4d5e'], 'circle-stroke-color':'#fff', 'circle-stroke-width':2 } });
       planMapReady = true; drawCands(); centerPlanner();
     });
-    planMap.on('click', e => { if(plan.mode === 'pick'){ plan.pick = [e.lngLat.lng, e.lngLat.lat]; renderStartInfo(); } });
+    planMap.on('click', e => {
+      if(edit){ editAddPoint(e); return; }
+      if(plan.mode === 'pick'){ plan.pick = [e.lngLat.lng, e.lngLat.lat]; renderStartInfo(); }
+    });
     const el = document.createElement('div'); el.style.cssText = 'width:22px;height:22px;border-radius:50%;background:#fff;border:5px solid #141a00;box-shadow:0 2px 8px rgba(0,0,0,.5)';
     planMarker = new maplibregl.Marker({ element: el, draggable: true });
     planMarker.on('dragend', () => { const ll = planMarker.getLngLat(); plan.pick = [ll.lng, ll.lat]; setStartMode('pick'); });
@@ -2129,7 +2153,7 @@ function renderSuggestions(){
       ${xingHTML(c.crossings)}
       ${prefTags(c)}
       ${profileSVG(c.profile, CAND_COLORS[i])}
-      <div class="controls" style="margin-top:8px"><button class="btn btn-ghost btn-sm" data-cand-save="${i}">Save</button><button class="btn btn-start btn-sm" data-cand-use="${i}">Save &amp; use for next run</button></div>
+      <div class="controls" style="margin-top:8px"><button class="btn btn-ghost btn-sm" data-cand-edit="${i}">✏️ Edit</button><button class="btn btn-ghost btn-sm" data-cand-save="${i}">Save</button><button class="btn btn-start btn-sm" data-cand-use="${i}">Save &amp; use</button></div>
     </div>`).join('');
 }
 $('#btnSuggest').addEventListener('click', async () => {
@@ -2178,6 +2202,8 @@ async function saveCandidate(i, use){
   else toast('Route saved to My routes');
 }
 document.addEventListener('click', e => {
+  const ed = e.target.closest('[data-cand-edit]');
+  if(ed){ e.stopPropagation(); const i = +ed.dataset.candEdit; startEdit(plan.cands[i], { kind:'cand', index: i }); return; }
   const s = e.target.closest('[data-cand-save],[data-cand-use]');
   if(s){ e.stopPropagation(); saveCandidate(+(s.dataset.candSave ?? s.dataset.candUse), s.dataset.candUse != null); return; }
   const c = e.target.closest('[data-cand]');
@@ -2207,8 +2233,13 @@ document.addEventListener('click', async e => {
   if(!m) return;
   const r = S.routes.find(x => x.id === m.dataset.routeMenu); if(!r) return;
   const a = await dialog({ title: r.name, html:`<p class="small muted" style="margin:0">${routeStats(r)}</p>`, buttons:[
-    { label: r.id === S.activeRouteId ? 'Unselect' : 'Select for runs', value:'use' }, { label:'Show on map', value:'show' }, { label:'Rename', value:'rename' },
+    { label: r.id === S.activeRouteId ? 'Unselect' : 'Select for runs', value:'use' }, { label:'✏️ Edit route', value:'edit' }, { label:'Show on map', value:'show' }, { label:'Rename', value:'rename' },
     { label:'Export GPX', value:'gpx' }, { label:'Delete', value:'del', cls:'btn-stop' }, { label:'Cancel', value:null } ] });
+  if(a.value === 'edit'){
+    if(!$('#view-routes').classList.contains('active')) showView('routes');
+    for(let t = 0; t < 40 && !planMapReady; t++) await sleep(250);
+    startEdit(r, { kind:'saved', id: r.id }); return;
+  }
   if(a.value === 'use'){ if(r.id === S.activeRouteId){ S.activeRouteId = null; await save('activeRouteId'); renderRouteLib(); setGuideFromActive(); } else selectRoute(r.id, true); }
   else if(a.value === 'show'){
     plan.cands = [{ ...r, color:'#c8f43c' }]; plan.sel = 0; $('#suggestions').innerHTML = ''; $('#suggestStatus').textContent = `Showing “${r.name}”.`;
@@ -2226,6 +2257,187 @@ document.addEventListener('click', async e => {
     const c = await dialog({ title:'Delete route?', html:`<p class="small muted" style="margin:0">“${esc(r.name)}” will be removed. Runs that used it keep their own GPS path.</p>`, buttons:[{ label:'Cancel', value:false }, { label:'Delete', value:true, cls:'btn-stop' }] });
     if(c.value){ S.routes = S.routes.filter(x => x.id !== r.id); if(S.activeRouteId === r.id) S.activeRouteId = null; await save('routes', 'activeRouteId'); renderRouteLib(); setGuideFromActive(); }
   }
+});
+
+/* =========================================================
+   Route editor: drag points, tap line to add, tap point to remove
+   ========================================================= */
+let edit = null;
+function makeHandles(coords){
+  const cum = [0]; for(let i = 1; i < coords.length; i++) cum.push(cum[i-1] + hav(coords[i-1], coords[i]));
+  const total = cum[cum.length - 1], step = Math.max(200, Math.min(800, total / 10)), hs = [{ idx: 0 }];
+  let j = 0;
+  for(let m = step; m < total - step * .6; m += step){
+    while(j < coords.length - 1 && cum[j] < m) j++;
+    if(j > hs[hs.length - 1].idx && j < coords.length - 1) hs.push({ idx: j });
+  }
+  return hs;
+}
+function startEdit(r, source){
+  if(!planMap || !planMapReady){ toast('The map is still loading. Try again in a moment.'); return; }
+  if(edit) endEdit();
+  const coords = r.coords.map(p => [p[0], p[1]]);
+  if(hav(coords[0], coords[coords.length - 1]) > 30) coords.push([coords[0][0], coords[0][1]]); // keep it a loop
+  edit = { source, base: r, coords, handles: makeHandles(coords), undo: [], markers: [], busy: false, dragged: false };
+  $('#plannerTop').classList.add('hidden'); $('#plannerControls').classList.add('hidden'); $('#editBar').classList.remove('hidden');
+  $('#editName').textContent = r.name ? `“${r.name}”` : 'suggestion';
+  if(planMarker) planMarker.remove();
+  editRedraw(); fitPlanner([coords]);
+  $('#planMap').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+function endEdit(){
+  if(!edit) return;
+  edit.markers.forEach(m => m.remove());
+  edit = null;
+  $('#plannerTop').classList.remove('hidden'); $('#plannerControls').classList.remove('hidden'); $('#editBar').classList.add('hidden');
+  $('#editStatus').textContent = '';
+  drawCands(); renderStartInfo();
+}
+function editRedraw(){
+  const e = edit;
+  planMap.getSource('cands').setData({ type:'FeatureCollection', features:[{ type:'Feature', properties:{ color:'#c8f43c', sel:true }, geometry:{ type:'LineString', coordinates: e.coords } }] });
+  planMap.getSource('xings').setData(EMPTY_FC);
+  e.markers.forEach(m => m.remove()); e.markers = [];
+  e.handles.forEach((h, i) => {
+    const el = document.createElement('div');
+    el.style.cssText = i === 0
+      ? 'width:24px;height:24px;border-radius:50%;background:#c8f43c;border:4px solid #141a00;box-shadow:0 2px 6px rgba(0,0,0,.5);touch-action:none'
+      : 'width:20px;height:20px;border-radius:50%;background:#fff;border:3px solid #141a00;box-shadow:0 2px 6px rgba(0,0,0,.5);touch-action:none';
+    const m = new maplibregl.Marker({ element: el, draggable: !e.busy }).setLngLat(e.coords[h.idx]).addTo(planMap);
+    m.on('dragstart', () => { e.dragged = true; });
+    m.on('dragend', () => { const ll = m.getLngLat(); editMove(i, [ll.lng, ll.lat]); setTimeout(() => { if(edit) edit.dragged = false; }, 300); });
+    el.addEventListener('click', ev => { ev.stopPropagation(); if(!edit || edit.dragged || edit.busy) return; editRemove(i); });
+    e.markers.push(m);
+  });
+  $('#editStats').textContent = `${fmtDist(pathLength(e.coords))} ${S.settings.units}`;
+  $('#editUndo').disabled = !e.undo.length || e.busy;
+  $('#editSave').disabled = e.busy;
+}
+function editBusy(on, msg){
+  edit.busy = on;
+  $('#editStatus').innerHTML = on ? `<span class="spin"></span>${esc(msg || 'Re-routing…')}` : (msg ? esc(msg) : '');
+  edit.markers.forEach(m => m.setDraggable(!on));
+  $('#editUndo').disabled = !edit.undo.length || on; $('#editSave').disabled = on;
+}
+const editUseHills = () => ({ any: .5, flat: 0, rolling: .5, hilly: 1 })[(edit && edit.base.terrain) || 'any'] ?? .5;
+function editSnapshot(){ edit.undo.push({ coords: edit.coords.map(p => p.slice()), handles: edit.handles.map(h => ({ ...h })) }); if(edit.undo.length > 30) edit.undo.shift(); }
+async function editMove(i, ll){
+  const e = edit; if(!e || e.busy) return;
+  const H = e.handles, n = H.length, L = e.coords.length - 1;
+  editSnapshot(); editBusy(true);
+  try{
+    if(i === 0){
+      if(n < 2) throw new Error('Add a point first');
+      const h1 = H[1].idx, last = H[n - 1].idx;
+      const res = await routeVia([e.coords[last], ll, e.coords[h1]], editUseHills());
+      const [legA, legB] = res.legs;
+      const middle = e.coords.slice(h1 + 1, last);
+      const off = (legB.length - 1) - h1;
+      e.coords = legB.concat(middle, legA.slice(0, -1), [legB[0]]);
+      H[0].idx = 0; for(let k = 1; k < n; k++) H[k].idx += off;
+    } else {
+      const a = H[i - 1].idx, b = i + 1 < n ? H[i + 1].idx : L;
+      const res = await routeVia([e.coords[a], ll, e.coords[b]], editUseHills());
+      const [leg1, leg2] = res.legs;
+      const seg = leg1.concat(leg2.slice(1));
+      seg[0] = e.coords[a]; seg[seg.length - 1] = e.coords[b];
+      const delta = seg.length - (b - a + 1);
+      e.coords = e.coords.slice(0, a).concat(seg, e.coords.slice(b + 1));
+      H[i].idx = a + leg1.length - 1;
+      for(let k = i + 1; k < n; k++) H[k].idx += delta;
+    }
+    editBusy(false, '');
+  }catch(err){
+    const prev = e.undo.pop(); e.coords = prev.coords; e.handles = prev.handles;
+    editBusy(false, '⚠ ' + (/Failed to fetch|NetworkError|Load failed/i.test(err.message) ? 'No connection to the routing service.' : 'No path there: ' + err.message));
+  }
+  if(edit) editRedraw();
+}
+async function editRemove(i){
+  const e = edit; if(i === 0){ toast('Drag the green dot to move start/finish'); return; }
+  if(e.handles.length <= 3){ toast('A loop needs at least 3 points'); return; }
+  const r = await dialog({ title:'Remove this point?', html:'<p class="small muted" style="margin:0">The route will go directly between the points on either side.</p>', buttons:[{ label:'Cancel', value:false }, { label:'Remove', value:true, cls:'btn-stop' }] });
+  if(!r.value || !edit) return;
+  const H = e.handles, L = e.coords.length - 1, a = H[i - 1].idx, b = i + 1 < H.length ? H[i + 1].idx : L;
+  editSnapshot(); editBusy(true);
+  try{
+    const res = await routeVia([e.coords[a], e.coords[b]], editUseHills());
+    const seg = res.coords.slice(); seg[0] = e.coords[a]; seg[seg.length - 1] = e.coords[b];
+    const delta = seg.length - (b - a + 1);
+    e.coords = e.coords.slice(0, a).concat(seg, e.coords.slice(b + 1));
+    H.splice(i, 1); for(let k = i; k < H.length; k++) H[k].idx += delta;
+    editBusy(false, '');
+  }catch(err){
+    const prev = e.undo.pop(); e.coords = prev.coords; e.handles = prev.handles;
+    editBusy(false, '⚠ Couldn’t re-route: ' + err.message);
+  }
+  if(edit) editRedraw();
+}
+function editAddPoint(ev){
+  const e = edit; if(!e || e.busy) return;
+  const f = planMap.queryRenderedFeatures([[ev.point.x - 12, ev.point.y - 12], [ev.point.x + 12, ev.point.y + 12]], { layers:['cands-hit'] });
+  if(!f.length) return;
+  const p = [ev.lngLat.lng, ev.lngLat.lat];
+  let bi = 1, bd = Infinity;
+  for(let k = 1; k < e.coords.length - 1; k++){ const d = hav(e.coords[k], p); if(d < bd){ bd = d; bi = k; } }
+  if(e.handles.some(h => h.idx === bi)) return;
+  editSnapshot();
+  e.handles.push({ idx: bi }); e.handles.sort((a, b) => a.idx - b.idx);
+  editRedraw(); $('#editStatus').textContent = 'Point added. Drag it where you want.';
+}
+$('#editUndo').addEventListener('click', () => { const e = edit; if(!e || e.busy || !e.undo.length) return; const prev = e.undo.pop(); e.coords = prev.coords; e.handles = prev.handles; $('#editStatus').textContent = ''; editRedraw(); });
+$('#editCancel').addEventListener('click', async () => {
+  if(edit && edit.undo.length){ const r = await dialog({ title:'Discard changes?', buttons:[{ label:'Keep editing', value:false }, { label:'Discard', value:true, cls:'btn-stop' }] }); if(!r.value) return; }
+  endEdit();
+});
+// Recalculate distance, climb, crossings and parks % for an edited line
+async function restat(coords, base){
+  const out = { coords, distance: Math.round(pathLength(coords)) };
+  Object.assign(out, await analyzeRoute(coords));
+  const wantX = base.crossings && base.crossings.avoid, wantG = base.friendly != null;
+  out.crossings = null; out.friendly = null;
+  if(wantX || wantG){
+    try{
+      const st = base.start ? [base.start.lon, base.start.lat] : coords[0];
+      const { B, G } = await fetchFeatures(st, Math.min(6000, Math.max(800, out.distance / Math.PI * 1.25)), { rail: wantX && wantX.rail, ave: wantX && wantX.ave, green: wantG });
+      if(B && wantX){ out.crossings = countCrossings(coords, B); out.crossings.avoid = wantX; }
+      if(G) out.friendly = friendliness(coords, G);
+    }catch{}
+  }
+  return out;
+}
+$('#editSave').addEventListener('click', async () => {
+  const e = edit; if(!e || e.busy) return;
+  if(!e.undo.length){ endEdit(); return; }
+  editBusy(true, 'Updating elevation and stats…');
+  let st;
+  try{ st = await restat(e.coords.map(p => [+p[0].toFixed(6), +p[1].toFixed(6)]), e.base); }
+  catch(err){ editBusy(false, '⚠ ' + err.message); return; }
+  const startLL = { lon: st.coords[0][0], lat: st.coords[0][1] };
+  if(e.source.kind === 'cand'){
+    const c = plan.cands[e.source.index];
+    Object.assign(c, st, { start: [startLL.lon, startLL.lat], overlap: st.overlap });
+    if(c.familiar != null){ const idx = buildRunIndex(c.start, 6000); c.familiar = idx ? familiarity(c.coords, idx) : c.familiar; }
+    endEdit(); plan.sel = e.source.index; renderSuggestions(); drawCands(); fitPlanner([c.coords]);
+    toast('Suggestion updated. Save it to keep it.');
+    return;
+  }
+  editBusy(false, '');
+  const r = S.routes.find(x => x.id === e.source.id);
+  const choice = await dialog({ title:'Save edited route', html:`<p class="small muted" style="margin:0">${fmtDist(st.distance)} ${S.settings.units} · ↑${st.ascent} m ↓${st.descent} m${st.friendly != null ? ' · 🌳 ' + Math.round(st.friendly * 100) + '%' : ''}</p>`,
+    buttons:[{ label:'Keep editing', value:null }, { label:'Save as new', value:'new' }, { label:'Save changes', value:'replace', cls:'btn-start' }] });
+  if(!choice.value) return;
+  const fields = { coords: st.coords.map(p => [+p[0].toFixed(5), +p[1].toFixed(5)]), distance: st.distance, ascent: st.ascent, descent: st.descent, minEle: st.minEle, maxEle: st.maxEle, profile: st.profile, start: startLL,
+    friendly: st.friendly != null ? Math.round(st.friendly * 100) / 100 : null,
+    crossings: st.crossings ? { rail: st.crossings.rail, ave: st.crossings.ave, avoid: st.crossings.avoid, points: st.crossings.points.map(x => ({ kind: x.kind, ll: [+x.ll[0].toFixed(5), +x.ll[1].toFixed(5)] })) } : null, edited: Date.now() };
+  if(choice.value === 'replace' && r){ Object.assign(r, fields); }
+  else { const copy = { ...(r || e.base), ...fields, id: uid(), name: ((r || e.base).name || 'Route') + ' (edited)', created: Date.now() }; S.routes.unshift(copy); }
+  await save('routes');
+  const shown = choice.value === 'replace' && r ? r : S.routes[0];
+  plan.cands = [{ ...shown, color:'#c8f43c' }]; plan.sel = 0; $('#suggestions').innerHTML = ''; $('#suggestStatus').textContent = `Showing “${shown.name}”.`;
+  endEdit(); renderRouteLib(); fitPlanner([shown.coords]);
+  if(S.activeRouteId && (choice.value === 'replace' && r && r.id === S.activeRouteId)) setGuideFromActive();
+  toast(choice.value === 'replace' ? 'Route updated' : 'Saved as a new route');
 });
 
 /* ---- Selected route on the Run map: dashed guide + distance left ---- */
