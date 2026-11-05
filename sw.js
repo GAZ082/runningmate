@@ -2,7 +2,7 @@
    - App files: network first (so updates arrive), cached copy when offline.
    - Map style/tiles/fonts: cache first, so areas you've already seen still show offline.
    Bump VERSION when you change the app files. */
-const VERSION = 'rm-20261105-1352';
+const VERSION = 'rm-20261105-1411';
 const APP_CACHE = `${VERSION}-app`;
 const MAP_CACHE = 'rm-map';           // kept across versions
 const MAP_MAX_ENTRIES = 3000;

@@ -240,6 +240,8 @@ return maplibregl$1;
   .xing{font-size:12px;margin-top:3px}
   .xing.ok{color:#a6e34f}
   .xing.bad{color:#ffb48a}
+  .tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px}
+  .tags span{font-size:11.5px;padding:2px 8px;border-radius:999px;background:var(--bg);border:1px solid var(--line);color:var(--text)}
   .route-chip{display:flex;align-items:center;gap:8px;background:var(--panel2);border:1px dashed #9aa3b5;border-radius:12px;padding:8px 10px;margin-bottom:12px;font-size:14px}
   .route-chip span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .route-chip .x{color:var(--muted);padding:2px 6px;font-size:16px}
@@ -333,6 +335,12 @@ return maplibregl$1;
           <div class="planmap" id="planMap"><div class="map-msg" id="planMsg"></div></div>
           <div class="field"><label for="rDist" id="rDistLbl">Distance (km)</label><input id="rDist" type="number" min="1" max="50" step="0.5" value="5" inputmode="decimal"></div>
           <div class="field"><label>Terrain</label><div class="seg" id="terrSeg"><button data-terrain="any" class="on" title="Ignore hills, just match the distance">Any</button><button data-terrain="flat">Flat</button><button data-terrain="rolling">Rolling</button><button data-terrain="hilly">Hilly</button></div></div>
+          <div class="field">
+            <label>Prefer</label>
+            <div class="switch"><span>🌳 Runner-friendly: parks, paths &amp; waterfronts</span><input type="checkbox" id="preferGreen" checked></div>
+            <div class="small muted" style="margin:8px 0 6px">Your streets (from your saved runs)</div>
+            <div class="seg" id="streetSeg"><button data-streets="any" class="on">Don't mind</button><button data-streets="familiar">🔁 Familiar</button><button data-streets="explore">🧭 Explore new</button></div>
+          </div>
           <div class="field" style="margin-bottom:6px">
             <label>Avoid</label>
             <div class="switch"><span>🚆 Crossing railroads</span><input type="checkbox" id="avoidRail"></div>
@@ -405,7 +413,7 @@ return maplibregl$1;
           </ul>
         </div>
         <button class="btn btn-ghost" id="btnWipe" style="width:100%;color:var(--danger)">Delete all data on this device</button>
-        <p class="small muted" id="buildInfo" style="text-align:center;margin:20px 0 0;opacity:.55;font-size:11px">Running Mate · build 2026-11-05 13:52 UTC</p>
+        <p class="small muted" id="buildInfo" style="text-align:center;margin:20px 0 0;opacity:.55;font-size:11px">Running Mate · build 2026-11-05 14:11 UTC</p>
       </div>
     </section>
   </main>
@@ -1647,34 +1655,156 @@ function projector(origin){
   const kx = Math.cos(origin[1] * Math.PI / 180) * 111320, ky = 110540;
   return { fwd: p => [(p[0] - origin[0]) * kx, (p[1] - origin[1]) * ky], inv: q => [origin[0] + q[0] / kx, origin[1] + q[1] / ky] };
 }
-async function fetchBarriers(start, radius, kinds){
-  const key = `${start[0].toFixed(3)},${start[1].toFixed(3)},${Math.round(radius / 250)},${kinds.rail ? 1 : 0}${kinds.ave ? 1 : 0}`;
+const bboxOf = pts => { const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]); return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; };
+const RAIL_RE = /^(rail|light_rail|narrow_gauge)$/, AVE_RE = /^(motorway|trunk|primary|secondary)(_link)?$/;
+const AVE_NAME_RE = /^(avenida|av\.|avenue|ave\.?|boulevard|bulevar|blvd\.?) /i;
+// One Overpass request for everything the planner needs: barriers (railroads / avenues) and
+// runner-friendly places (parks, paths, waterfronts). Returns { B: barriers|null, G: green|null }.
+async function fetchFeatures(start, radius, want){
+  const key = `${start[0].toFixed(3)},${start[1].toFixed(3)},${Math.round(radius / 250)},${+!!want.rail}${+!!want.ave}${+!!want.green}`;
   if(barrierCache.has(key)) return barrierCache.get(key);
   const A = `(around:${Math.round(radius)},${start[1].toFixed(6)},${start[0].toFixed(6)})`;
   const noBT = '["bridge"!~"."]["tunnel"!~"."]';
-  const q = `[out:json][timeout:25];(` +
-    (kinds.rail ? `way${A}["railway"~"^(rail|light_rail|narrow_gauge)$"]${noBT};` : '') +
-    (kinds.ave ? `way${A}["highway"~"^(motorway|trunk|primary|secondary)(_link)?$"]${noBT};` +
-                 `way${A}["highway"~"^(tertiary|unclassified|residential)$"]["name"~"^(avenida|av[.]|avenue|ave[.]?|boulevard|bulevar|blvd[.]?) ",i]${noBT};` : '') +
+  const q = `[out:json][timeout:30];(` +
+    (want.rail ? `way${A}["railway"~"^(rail|light_rail|narrow_gauge)$"]${noBT};` : '') +
+    (want.ave ? `way${A}["highway"~"^(motorway|trunk|primary|secondary)(_link)?$"]${noBT};` +
+                `way${A}["highway"~"^(tertiary|unclassified|residential)$"]["name"~"^(avenida|av[.]|avenue|ave[.]?|boulevard|bulevar|blvd[.]?) ",i]${noBT};` : '') +
+    (want.green ? `way${A}["leisure"~"^(park|garden|nature_reserve|track)$"];relation${A}["leisure"~"^(park|nature_reserve)$"]["type"="multipolygon"];` +
+                  `way${A}["landuse"~"^(recreation_ground|village_green)$"];` +
+                  `way${A}["highway"~"^(path|pedestrian|track|cycleway)$"];way${A}["highway"="footway"]["footway"!~"^(sidewalk|crossing|access_aisle|traffic_island)$"];` +
+                  `way${A}["waterway"~"^(river|canal)$"];way${A}["natural"~"^(coastline|water)$"];` : '') +
     `);out geom qt;`;
   let lastErr;
   for(const url of OVERPASS){
     try{
       const res = await fetch(url, { method:'POST', body: new URLSearchParams({ data: q }) });
-      if(!res.ok) throw new Error('Map data server busy (' + res.status + ')');
+      if(!res.ok) throw new Error('map data server busy (' + res.status + ')');
       const j = await res.json();
-      const P = projector(start);
-      const ways = (j.elements || []).filter(e => e.type === 'way' && e.geometry && e.geometry.length > 1).map(e => {
-        const pts = e.geometry.map(g => P.fwd([g.lon, g.lat]));
-        const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
-        return { kind: e.tags && e.tags.railway ? 'rail' : 'ave', name: (e.tags && e.tags.name) || '', pts, bbox: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] };
-      });
-      const out = { origin: start, P, ways: mergeChains(ways) };
+      const P = projector(start), proj = geom => geom.map(g => P.fwd([g.lon, g.lat]));
+      const barrierWays = [], parks = [], paths = [], water = [];
+      for(const e of j.elements || []){
+        const t = e.tags || {};
+        if(e.type === 'relation'){
+          const outer = (e.members || []).filter(m => m.type === 'way' && m.role !== 'inner' && m.geometry && m.geometry.length > 1).map(m => proj(m.geometry));
+          for(const ring of assembleRings(outer)) parks.push(ring);
+          continue;
+        }
+        if(e.type !== 'way' || !e.geometry || e.geometry.length < 2) continue;
+        const pts = proj(e.geometry), closed = e.geometry.length > 3 && hav([e.geometry[0].lon, e.geometry[0].lat], [e.geometry[e.geometry.length-1].lon, e.geometry[e.geometry.length-1].lat]) < 1;
+        const atGrade = !t.bridge && !t.tunnel;
+        if(want.rail && t.railway && RAIL_RE.test(t.railway) && atGrade) barrierWays.push({ kind:'rail', name: t.name || '', pts, bbox: bboxOf(pts) });
+        if(want.ave && t.highway && atGrade && (AVE_RE.test(t.highway) || (/^(tertiary|unclassified|residential)$/.test(t.highway) && AVE_NAME_RE.test(t.name || ''))))
+          barrierWays.push({ kind:'ave', name: t.name || '', pts, bbox: bboxOf(pts) });
+        if(!want.green) continue;
+        if(closed && (/^(park|garden|nature_reserve)$/.test(t.leisure) || /^(recreation_ground|village_green)$/.test(t.landuse))) parks.push(pts);
+        else if(t.leisure === 'track' || /^(path|pedestrian|track|cycleway)$/.test(t.highway) || (t.highway === 'footway' && !/^(sidewalk|crossing|access_aisle|traffic_island)$/.test(t.footway || ''))) paths.push(pts);
+        else if(/^(river|canal)$/.test(t.waterway) || t.natural === 'coastline' || t.natural === 'water') water.push(pts);
+      }
+      const B = (want.rail || want.ave) ? { origin: start, P, ways: mergeChains(barrierWays) } : null;
+      const G = want.green ? {
+        P,
+        parks: parks.map(r => { const bb = bboxOf(r); let a = 0; for(let i = 1; i < r.length; i++) a += r[i-1][0] * r[i][1] - r[i][0] * r[i-1][1];
+          const c = [r.reduce((s, p) => s + p[0], 0) / r.length, r.reduce((s, p) => s + p[1], 0) / r.length]; return { ring: r, bbox: bb, area: Math.abs(a / 2), c }; }),
+        paths: segGrid(paths, 50), water: segGrid(water, 60)
+      } : null;
+      const out = { B, G };
       barrierCache.set(key, out);
       return out;
     }catch(e){ lastErr = e; }
   }
-  throw new Error('Couldn’t load railroads/avenues from OpenStreetMap (' + (lastErr && lastErr.message) + '). Try again, or turn the Avoid options off.');
+  const err = new Error('Couldn’t load map data from OpenStreetMap (' + (lastErr && lastErr.message) + ').');
+  err.overpass = true;
+  throw err;
+}
+function assembleRings(lines){
+  const near = (a, b) => Math.abs(a[0] - b[0]) < .5 && Math.abs(a[1] - b[1]) < .5;
+  const pool = lines.map(l => l.slice()), rings = [];
+  while(pool.length){
+    let ring = pool.shift();
+    for(let guard = 0; guard < 2000 && !near(ring[0], ring[ring.length - 1]); guard++){
+      const end = ring[ring.length - 1];
+      const i = pool.findIndex(l => near(l[0], end) || near(l[l.length - 1], end));
+      if(i < 0) break;
+      const l = pool.splice(i, 1)[0];
+      ring = ring.concat(near(l[0], end) ? l.slice(1) : l.slice(0, -1).reverse());
+    }
+    if(ring.length > 3 && near(ring[0], ring[ring.length - 1])) rings.push(ring);
+  }
+  return rings;
+}
+// Simple spatial grid of line segments for fast "is this point near a path/water?" checks
+function segGrid(lines, cell){
+  const g = new Map();
+  for(const l of lines) for(let i = 1; i < l.length; i++){
+    const a = l[i-1], b = l[i];
+    const x0 = Math.floor(Math.min(a[0], b[0]) / cell), x1 = Math.floor(Math.max(a[0], b[0]) / cell);
+    const y0 = Math.floor(Math.min(a[1], b[1]) / cell), y1 = Math.floor(Math.max(a[1], b[1]) / cell);
+    if((x1 - x0 + 1) * (y1 - y0 + 1) > 900) continue;
+    for(let x = x0; x <= x1; x++) for(let y = y0; y <= y1; y++){ const k = x + ',' + y; if(!g.has(k)) g.set(k, []); g.get(k).push([a, b]); }
+  }
+  return { g, cell };
+}
+function distSeg(p, a, b){
+  const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy || 1e-9;
+  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2));
+  return Math.hypot(a[0] + t * dx - p[0], a[1] + t * dy - p[1]);
+}
+function nearGrid(grid, p, maxD){
+  const cx = Math.floor(p[0] / grid.cell), cy = Math.floor(p[1] / grid.cell), r = Math.ceil(maxD / grid.cell);
+  for(let x = cx - r; x <= cx + r; x++) for(let y = cy - r; y <= cy + r; y++){
+    const list = grid.g.get(x + ',' + y); if(!list) continue;
+    for(const [a, b] of list) if(distSeg(p, a, b) <= maxD) return true;
+  }
+  return false;
+}
+function inRing(p, ring){
+  let inside = false;
+  for(let i = 0, j = ring.length - 1; i < ring.length; j = i++){
+    const a = ring[i], b = ring[j];
+    if(((a[1] > p[1]) !== (b[1] > p[1])) && (p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1] || 1e-9) + a[0])) inside = !inside;
+  }
+  return inside;
+}
+// Share of the route (0..1) that is in a park, on a path/track, or along water
+function friendliness(coords, G){
+  const pts = resample(coords, 25).map(q => G.P.fwd(q));
+  let ok = 0;
+  for(const p of pts){
+    if(nearGrid(G.paths, p, 12) || nearGrid(G.water, p, 40) || G.parks.some(k => p[0] >= k.bbox[0] && p[0] <= k.bbox[2] && p[1] >= k.bbox[1] && p[1] <= k.bbox[3] && inRing(p, k.ring))) ok++;
+  }
+  return pts.length ? ok / pts.length : 0;
+}
+
+/* ---- Your own runs: familiar vs new streets (all on this device) ---- */
+function buildRunIndex(start, radius){
+  const P = projector(start), cells = new Set();
+  for(const r of S.history) for(const seg of r.segments || []){
+    if(!seg || seg.length < 2) continue;
+    if(hav(seg[0], start) > radius + 20000) continue;
+    for(const q of resample(seg.map(p => [p[0], p[1]]), 10)){
+      const v = P.fwd(q);
+      if(Math.abs(v[0]) > radius || Math.abs(v[1]) > radius) continue;
+      cells.add(Math.floor(v[0] / 20) + ',' + Math.floor(v[1] / 20));
+    }
+  }
+  return cells.size ? { P, cells } : null;
+}
+function familiarity(coords, idx){
+  const pts = resample(coords, 25); let hit = 0;
+  for(const q of pts){
+    const v = idx.P.fwd(q), cx = Math.floor(v[0] / 20), cy = Math.floor(v[1] / 20);
+    let f = false;
+    for(let dx = -1; dx <= 1 && !f; dx++) for(let dy = -1; dy <= 1 && !f; dy++) if(idx.cells.has((cx + dx) + ',' + (cy + dy))) f = true;
+    if(f) hit++;
+  }
+  return pts.length ? hit / pts.length : 0;
+}
+// Bearings (sector centres) ordered by how much you've run there: most for Familiar, least for Explore
+function sectorBearings(idx, mode, n){
+  const counts = new Array(8).fill(0);
+  for(const k of idx.cells){ const [x, y] = k.split(',').map(Number); const brg = (Math.atan2(x + .5, y + .5) * 180 / Math.PI + 360) % 360; counts[Math.floor(((brg + 22.5) % 360) / 45)]++; }
+  const order = counts.map((c, i) => ({ c, b: i * 45 })).sort((a, b) => mode === 'familiar' ? b.c - a.c : a.c - b.c);
+  return order.slice(0, n).map(o => o.b);
 }
 // OSM splits an avenue into many short ways. Join pieces that meet end-to-end (same kind,
 // going roughly straight on) into long lines, so "side of the avenue" is well defined.
@@ -1784,19 +1914,36 @@ function clipToSide(points, B){
 }
 
 async function suggestLoops(start, targetM, opts, onStatus){
-  const { terrain, avoidRail, avoidAve } = opts;
+  const { terrain, avoidRail, avoidAve, green, streets } = opts;
   const useHills = { any: 0.5, flat: 0, rolling: 0.5, hilly: 1 }[terrain];
   const avoiding = avoidRail || avoidAve;
-  let B = null;
-  if(avoiding){
-    onStatus('Loading railroads and avenues nearby…');
-    B = await fetchBarriers(start, Math.min(6000, Math.max(800, targetM / Math.PI * 1.25)), { rail: avoidRail, ave: avoidAve });
+  const radius = Math.min(6000, Math.max(800, targetM / Math.PI * 1.25));
+  let B = null, G = null, notes = [];
+  if(avoiding || green){
+    onStatus(avoiding ? 'Loading railroads, avenues and parks nearby…' : 'Loading parks and paths nearby…');
+    try{ ({ B, G } = await fetchFeatures(start, radius, { rail: avoidRail, ave: avoidAve, green })); }
+    catch(e){
+      if(avoiding) throw new Error(e.message + ' Try again, or turn the Avoid options off.');
+      notes.push('Couldn’t load parks & paths this time, so these routes ignore that preference.');
+    }
   }
+  const idx = streets !== 'any' ? buildRunIndex(start, radius) : null;
+  if(streets !== 'any' && !idx) notes.push('No saved runs near here yet, so Familiar/Explore was skipped.');
+
   const base = Math.random() * 360, gens = [];
-  const nCircle = 4;
-  for(let k = 0; k < nCircle; k++){ const b = (base + k * 360 / nCircle) % 360; gens.push({ r0: targetM / (2 * Math.PI * 1.3), make: r => loopWaypoints(start, r, b) }); }
+  const nCircle = (G ? 3 : 4);
+  const bearings = idx ? sectorBearings(idx, streets, nCircle) : [...Array(nCircle)].map((_, k) => (base + k * 360 / nCircle) % 360);
+  for(const b of bearings) gens.push({ r0: targetM / (2 * Math.PI * 1.3), make: r => loopWaypoints(start, r, b) });
+  if(G){
+    // Loops that pass through the nearest decent-sized parks (≥ 1 ha), in different directions
+    const picked = [];
+    const parks = G.parks.filter(k => k.area >= 10000).map(k => ({ ...k, d: Math.hypot(k.c[0], k.c[1]), brg: (Math.atan2(k.c[0], k.c[1]) * 180 / Math.PI + 360) % 360 }))
+      .filter(k => k.d >= 150 && k.d <= targetM * 0.42).sort((a, b) => (a.d / Math.sqrt(a.area)) - (b.d / Math.sqrt(b.area)));
+    for(const k of parks){ if(picked.length >= 2) break; if(picked.every(o => Math.abs(((o.brg - k.brg + 540) % 360) - 180) > 45)) picked.push(k); }
+    for(const k of picked){ const via = G.P.inv(k.c); gens.push({ r0: Math.max(k.d / 2, targetM / (2 * Math.PI * 1.3) * .7), make: r => { const p = loopWaypoints(start, r, k.brg); p[2] = via; return p; } }); }
+  }
   if(B){ gens.push({ r0: targetM / (2 * Math.PI * 1.3 + 2), make: r => aroundWaypoints(start, r, 8, base) }); gens.push({ r0: targetM / (2 * Math.PI * 1.3 + 2) * .8, make: r => aroundWaypoints(start, r, 6, base + 30) }); }
-  const attempts = B ? 2 : 3, found = [];
+  const attempts = gens.length > 4 ? 2 : 3, found = [];
   let lastErr = null;
   for(let k = 0; k < gens.length; k++){
     let r = gens[k].r0, best = null;
@@ -1819,15 +1966,22 @@ async function suggestLoops(start, targetM, opts, onStatus){
   for(const c of found){
     Object.assign(c, await analyzeRoute(c.coords));
     if(B){ c.crossings = countCrossings(c.coords, B); c.crossings.avoid = { rail: avoidRail, ave: avoidAve }; }
+    if(G) c.friendly = friendliness(c.coords, G);
+    if(idx){ c.familiar = familiarity(c.coords, idx); c.streetsMode = streets; }
   }
   const xcount = c => !c.crossings ? 0 : (avoidRail ? c.crossings.rail : 0) + (avoidAve ? c.crossings.ave : 0);
   const score = c => {
     const gain = c.ascent / (c.distance / 1000), err = Math.abs(c.distance - targetM) / targetM;
-    if(terrain === 'any') return err * 100 + c.overlap * 5;                     // just the closest distance
-    const t = terrain === 'flat' ? gain : terrain === 'hilly' ? -gain : Math.abs(gain - 12);
-    return t + c.overlap * 40 + err * 30;
+    let s;
+    if(terrain === 'any') s = err * 100 + c.overlap * 5;                     // just the closest distance
+    else s = (terrain === 'flat' ? gain : terrain === 'hilly' ? -gain : Math.abs(gain - 12)) + c.overlap * 40 + err * 30;
+    if(G) s -= (c.friendly || 0) * 30;                                        // more parks/paths/water = better
+    if(idx) s -= (streets === 'familiar' ? c.familiar : 1 - c.familiar) * 25;
+    return s;
   };
-  return found.sort((a, b) => (xcount(a) - xcount(b)) || (score(a) - score(b))).slice(0, 3).map(c => ({ ...c, xcount: xcount(c) }));
+  const out = found.sort((a, b) => (xcount(a) - xcount(b)) || (score(a) - score(b))).slice(0, 3).map(c => ({ ...c, xcount: xcount(c) }));
+  out.notes = notes;
+  return out;
 }
 
 /* =========================================================
@@ -1842,12 +1996,26 @@ function loadRoutePrefs(){
   document.querySelectorAll('#terrSeg button').forEach(x => x.classList.toggle('on', x.dataset.terrain === plan.terrain));
   if(p.dist) $('#rDist').value = p.dist;
   $('#avoidRail').checked = !!p.avoidRail; $('#avoidAve').checked = !!p.avoidAve;
+  $('#preferGreen').checked = p.green !== false;
+  plan.streets = p.streets || 'any';
+  document.querySelectorAll('#streetSeg button').forEach(x => x.classList.toggle('on', x.dataset.streets === plan.streets));
 }
 function saveRoutePrefs(){
-  S.settings.routePrefs = { terrain: plan.terrain, dist: parseFloat($('#rDist').value) || 5, avoidRail: $('#avoidRail').checked, avoidAve: $('#avoidAve').checked };
+  S.settings.routePrefs = { terrain: plan.terrain, dist: parseFloat($('#rDist').value) || 5, avoidRail: $('#avoidRail').checked, avoidAve: $('#avoidAve').checked, green: $('#preferGreen').checked, streets: plan.streets || 'any' };
   save('settings');
 }
-['#avoidRail', '#avoidAve', '#rDist'].forEach(id => $(id).addEventListener('change', saveRoutePrefs));
+['#avoidRail', '#avoidAve', '#rDist', '#preferGreen'].forEach(id => $(id).addEventListener('change', saveRoutePrefs));
+document.querySelectorAll('#streetSeg button').forEach(b => b.addEventListener('click', () => {
+  plan.streets = b.dataset.streets;
+  document.querySelectorAll('#streetSeg button').forEach(x => x.classList.toggle('on', x === b));
+  saveRoutePrefs();
+}));
+function prefTags(c){
+  const t = [];
+  if(c.friendly != null) t.push(`🌳 ${Math.round(c.friendly * 100)}% parks &amp; paths`);
+  if(c.familiar != null) t.push(c.streetsMode === 'familiar' ? `🔁 ${Math.round(c.familiar * 100)}% familiar` : `🧭 ${Math.round((1 - c.familiar) * 100)}% new to you`);
+  return t.length ? `<div class="tags">${t.map(x => `<span>${x}</span>`).join('')}</div>` : '';
+}
 function xingHTML(x){
   if(!x || !x.avoid) return '';
   const parts = [];
@@ -1959,6 +2127,7 @@ function renderSuggestions(){
       <div class="h"><i class="sw" style="background:${CAND_COLORS[i]}"></i><span style="flex:1">Option ${i + 1}</span><span class="small muted" style="font-weight:400">${c.overlap > .25 ? 'some out-and-back' : 'loop'}</span></div>
       <div class="small muted" style="margin-top:2px">${routeStats(c)}</div>
       ${xingHTML(c.crossings)}
+      ${prefTags(c)}
       ${profileSVG(c.profile, CAND_COLORS[i])}
       <div class="controls" style="margin-top:8px"><button class="btn btn-ghost btn-sm" data-cand-save="${i}">Save</button><button class="btn btn-start btn-sm" data-cand-use="${i}">Save &amp; use for next run</button></div>
     </div>`).join('');
@@ -1975,9 +2144,10 @@ $('#btnSuggest').addEventListener('click', async () => {
   try{
     const avoidRail = $('#avoidRail').checked, avoidAve = $('#avoidAve').checked;
     saveRoutePrefs();
-    const res = await suggestLoops(start, target, { terrain: plan.terrain, avoidRail, avoidAve }, status);
+    const res = await suggestLoops(start, target, { terrain: plan.terrain, avoidRail, avoidAve, green: $('#preferGreen').checked, streets: plan.streets || 'any' }, status);
     plan.cands = res.map((c, i) => ({ ...c, color: CAND_COLORS[i], start, terrain: plan.terrain }));
     let msg = `${plan.cands.length} suggestion${plan.cands.length > 1 ? 's' : ''}, best match first. Tap one to highlight it.`;
+    if(res.notes && res.notes.length) msg += ' ' + res.notes.join(' ');
     if(avoidRail || avoidAve){
       const best = plan.cands[0];
       if(best.xcount > 0) msg = `⚠ Every loop found here crosses at least once. You may be boxed in by ${[avoidRail && 'railroads', avoidAve && 'avenues'].filter(Boolean).join(' and ')}. These have the fewest crossings (marked on the map). A shorter distance may help.`;
@@ -1998,6 +2168,7 @@ async function saveCandidate(i, use){
   const route = { id: uid(), name: (r.input || def).trim() || def, created: Date.now(), start: { lon: c.start[0], lat: c.start[1] }, terrain: c.terrain,
     distance: Math.round(c.distance), ascent: c.ascent, descent: c.descent, minEle: c.minEle, maxEle: c.maxEle, engine: c.engine,
     coords: c.coords.map(p => [+p[0].toFixed(5), +p[1].toFixed(5)]), profile: c.profile,
+    friendly: c.friendly != null ? Math.round(c.friendly * 100) / 100 : null,
     crossings: c.crossings ? { rail: c.crossings.rail, ave: c.crossings.ave, avoid: c.crossings.avoid, points: c.crossings.points.map(x => ({ kind: x.kind, ll: [+x.ll[0].toFixed(5), +x.ll[1].toFixed(5)] })) } : null };
   S.routes.unshift(route);
   if(use) S.activeRouteId = route.id;
@@ -2018,7 +2189,7 @@ function renderRouteLib(){
   if(!S.routes.length){ lib.innerHTML = '<h3>My routes</h3><p class="small muted" style="margin:0">Routes you save will appear here. Select one and it shows on the Run map as a dashed line, with the distance left as you go.</p>'; return; }
   lib.innerHTML = '<h3>My routes</h3>' + S.routes.map(r => `
     <div class="route-item">
-      <div class="top"><div class="info"><div class="n">${esc(r.name)}</div><div class="small muted">${routeStats(r)}${routeXingShort(r)}</div></div>
+      <div class="top"><div class="info"><div class="n">${esc(r.name)}</div><div class="small muted">${routeStats(r)}${routeXingShort(r)}${r.friendly != null ? ` · 🌳 ${Math.round(r.friendly * 100)}%` : ''}</div></div>
         ${r.id === S.activeRouteId ? '<span class="pill on">Selected</span>' : `<button class="go" data-route-use="${r.id}">Select</button>`}
         <button class="menu-btn" data-route-menu="${r.id}" aria-label="Route options">⋯</button></div>
       ${profileSVG(r.profile, r.id === S.activeRouteId ? '#c8f43c' : '#9aa3b5', 34)}
