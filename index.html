@@ -389,7 +389,9 @@ return maplibregl$1;
           <div class="field"><label for="setUnits">Units</label>
             <select id="setUnits"><option value="km">Kilometres</option><option value="mi">Miles</option></select></div>
           <div class="switch"><span>Voice &amp; beep cues for phase changes</span><input type="checkbox" id="setVoice"></div>
-          <div class="switch"><span>Vibrate on phase changes</span><input type="checkbox" id="setVibe"></div>
+          <div class="switch"><span>Vibrate on phase changes <span class="muted small">(3 short buzzes)</span></span><input type="checkbox" id="setVibe"></div>
+          <div class="switch"><span>Vibrate for turns on a selected route <span class="muted small">(right: 1 buzz · left: 2 buzzes)</span></span><input type="checkbox" id="setTurnVibe"></div>
+          <div class="row" style="gap:8px;margin:2px 0 8px"><span class="small muted" style="flex:1">Feel the patterns:</span><button class="go2" id="testRight">↱ Right</button><button class="go2" id="testLeft">↰ Left</button></div>
           <div class="switch"><span>Keep screen awake while running</span><input type="checkbox" id="setWake"></div>
           <div class="field" style="margin-top:10px"><label for="setStyle">Map style URL</label><input id="setStyle" type="url">
             <p class="small muted" style="margin:6px 0 0">Default: OpenFreeMap “Liberty” (OpenMapTiles vector tiles, no key). Any MapLibre style URL works, e.g. MapTiler: <code>https://api.maptiler.com/maps/streets-v2/style.json?key=…</code></p></div>
@@ -423,7 +425,7 @@ return maplibregl$1;
           </ul>
         </div>
         <button class="btn btn-ghost" id="btnWipe" style="width:100%;color:var(--danger)">Delete all data on this device</button>
-        <p class="small muted" id="buildInfo" style="text-align:center;margin:20px 0 0;opacity:.55;font-size:11px">Running Mate · build 2026-11-05 14:37 UTC</p>
+        <p class="small muted" id="buildInfo" style="text-align:center;margin:20px 0 0;opacity:.55;font-size:11px">Running Mate · build 2026-11-05 14:58 UTC</p>
       </div>
     </section>
   </main>
@@ -629,7 +631,7 @@ const DB = {
     try{ localStorage.setItem('rm2.' + k, JSON.stringify(v)); return Promise.resolve(true); }catch{ toast('Could not save: storage is full or unavailable'); return Promise.resolve(false); }
   }
 };
-const DEFAULT_SETTINGS = { units:'km', voice:true, vibe:true, wake:true, style:'https://tiles.openfreemap.org/styles/liberty', home:null };
+const DEFAULT_SETTINGS = { units:'km', voice:true, vibe:true, turnVibe:true, wake:true, style:'https://tiles.openfreemap.org/styles/liberty', home:null };
 const S = { settings: { ...DEFAULT_SETTINGS }, plans: [], activePlanId: null, done: {}, history: [], live: null, routes: [], activeRouteId: null };
 const KEYS = ['settings','plans','activePlanId','done','history','live','routes','activeRouteId'];
 const save = (...keys) => Promise.all(keys.map(k => DB.set(k, S[k])));
@@ -825,7 +827,7 @@ $('#btnStart').addEventListener('click', () => {
   if(run.status === 'idle'){
     Object.assign(run, { accMs:0, startedAt:Date.now(), segments:[[]], distance:0, points:0, phaseIdx:-1, beepAt:-1, finished:false });
     const ar = activeRoute(); run.route = ar ? { id: ar.id, name: ar.name, distance: ar.distance } : null;
-    if(guideCache) guideCache.idx = 0;
+    if(guideCache){ guideCache.idx = 0; guideCache.tNext = 0; guideCache.turns.forEach(t => { t.done = false; }); }
     if(run.session) say('Starting ' + run.session.title);
   } else if(run.status === 'paused'){
     run.segments.push([]); say('Resumed');
@@ -949,7 +951,7 @@ function updatePhase(t, silent){
   if(cur.i !== run.phaseIdx){
     run.phaseIdx = cur.i; run.beepAt = -1;
     const extra = p.label && p.label.toLowerCase() !== info.name.toLowerCase() ? ', ' + p.label : '';
-    cue(`${info.say}${extra}, for ${spokenDur(p.seconds)}${p.target ? '. Target ' + p.target : ''}`, [400,150,400], 2);
+    cue(`${info.say}${extra}, for ${spokenDur(p.seconds)}${p.target ? '. Target ' + p.target : ''}`, [150,100,150,100,150], 2); // 3 short buzzes: distinct from turn cues
   } else {
     const r = Math.ceil(cur.remaining);
     if(r <= 3 && r >= 1 && r !== run.beepAt){ run.beepAt = r; beep(660, .12); }
@@ -1484,12 +1486,12 @@ async function importText(text){
    ========================================================= */
 function loadSettingsForm(){
   const s = S.settings;
-  $('#setUnits').value = s.units; $('#setVoice').checked = s.voice; $('#setVibe').checked = s.vibe; $('#setWake').checked = s.wake; $('#setStyle').value = s.style;
+  $('#setUnits').value = s.units; $('#setVoice').checked = s.voice; $('#setVibe').checked = s.vibe; $('#setTurnVibe').checked = s.turnVibe !== false; $('#setWake').checked = s.wake; $('#setStyle').value = s.style;
 }
 function applyUnitLabels(){ const u = S.settings.units; $('#sDistK').textContent = `Distance (${u})`; $('#sPaceK').textContent = `Pace (/${u})`; $('#sAvgK').textContent = `Avg pace (/${u})`; }
 $('#btnSaveSettings').addEventListener('click', async () => {
   const style = $('#setStyle').value.trim() || DEFAULT_SETTINGS.style, styleChanged = style !== S.settings.style;
-  Object.assign(S.settings, { units: $('#setUnits').value, voice: $('#setVoice').checked, vibe: $('#setVibe').checked, wake: $('#setWake').checked, style });
+  Object.assign(S.settings, { units: $('#setUnits').value, voice: $('#setVoice').checked, vibe: $('#setVibe').checked, turnVibe: $('#setTurnVibe').checked, wake: $('#setWake').checked, style });
   await save('settings'); applyUnitLabels(); tick(); renderDataSummary();
   if(styleChanged && map){
     mapReady = false; map.setStyle(style);
@@ -2442,6 +2444,34 @@ $('#editSave').addEventListener('click', async () => {
 
 /* ---- Selected route on the Run map: dashed guide + distance left ---- */
 let guideCache = null;
+const TURN_CUE_M = 25;            // buzz this many metres before the turn
+const TURN_MIN_DEG = 40;          // bends gentler than this aren't treated as turns
+function bearingDeg(a, b){
+  const r = Math.PI / 180, y = Math.sin((b[0] - a[0]) * r) * Math.cos(b[1] * r);
+  const x = Math.cos(a[1] * r) * Math.sin(b[1] * r) - Math.sin(a[1] * r) * Math.cos(b[1] * r) * Math.cos((b[0] - a[0]) * r);
+  return (Math.atan2(y, x) / r + 360) % 360;
+}
+// Find turns on a route resampled every 10 m: compare the heading over the 30 m before and after
+// each point; keep the sharpest point of each bend. Positive angle = right turn.
+function detectTurns(pts){
+  const K = 3, cand = [];
+  for(let i = K; i < pts.length - K; i++){
+    const d = ((bearingDeg(pts[i], pts[i + K]) - bearingDeg(pts[i - K], pts[i]) + 540) % 360) - 180;
+    if(Math.abs(d) >= TURN_MIN_DEG) cand.push({ i, d });
+  }
+  const turns = []; let grp = [];
+  const flush = () => { if(!grp.length) return; const m = grp.reduce((x, y) => Math.abs(y.d) > Math.abs(x.d) ? y : x); turns.push({ at: pts[m.i][2], dir: m.d > 0 ? 'R' : 'L', angle: Math.round(m.d) }); grp = []; };
+  for(const c of cand){ if(grp.length && (c.i - grp[grp.length - 1].i > 2 || Math.sign(c.d) !== Math.sign(grp[0].d))) flush(); grp.push(c); }
+  flush();
+  const end = pts[pts.length - 1][2];
+  return turns.filter(t => t.at > 15 && t.at < end - 15);
+}
+function turnBuzz(dir){
+  if(S.settings.turnVibe === false || !navigator.vibrate) return;
+  try{ navigator.vibrate(dir === 'R' ? [500] : [500, 250, 500]); }catch{}
+}
+$('#testRight').addEventListener('click', () => { if(!navigator.vibrate){ toast('This browser can’t vibrate (iPhones don’t support it)'); return; } navigator.vibrate([500]); });
+$('#testLeft').addEventListener('click', () => { if(!navigator.vibrate){ toast('This browser can’t vibrate (iPhones don’t support it)'); return; } navigator.vibrate([500, 250, 500]); });
 function addGuideLayer(m){
   if(m.getSource('guide')) return;
   m.addSource('guide', { type:'geojson', data: EMPTY_FC });
@@ -2452,7 +2482,7 @@ function setGuideFromActive(fit){
   const r = activeRoute();
   if(r){
     const dense = resample(r.coords, 10);
-    guideCache = { id: r.id, pts: dense, total: dense[dense.length - 1][2], idx: 0 };
+    guideCache = { id: r.id, pts: dense, total: dense[dense.length - 1][2], idx: 0, turns: detectTurns(dense), tNext: 0 };
   } else guideCache = null;
   drawGuide(); updateRouteChip();
   if(fit && r && map){ follow = false; const b = r.coords.reduce((bb, p) => bb.extend(p), new maplibregl.LngLatBounds(r.coords[0], r.coords[0])); setTimeout(() => { map.resize(); map.fitBounds(b, { padding: 40, maxZoom: 16, duration: 0 }); }, 80); }
@@ -2468,8 +2498,20 @@ function updateRouteChip(pt){
     let best = Infinity, bi = g.idx;
     for(let i = g.idx; i <= to; i++){ const d = hav(g.pts[i], pt); if(d < best){ best = d; bi = i; } }
     if(best <= 60) g.idx = bi;
-    const left = Math.max(0, g.total - g.pts[g.idx][2]);
+    const here = g.pts[g.idx][2], left = Math.max(0, g.total - here);
     text = best > 60 ? `🗺 ⚠ Off route (${Math.round(best)} m away) · ${fmtDist(left)} ${S.settings.units} left` : `🗺 ${fmtDist(left)} ${S.settings.units} to go · ${r.name}`;
+    // Turn cues: buzz once ~25 m before a right turn, twice before a left turn
+    if(best <= 60 && g.turns){
+      while(g.tNext < g.turns.length && g.turns[g.tNext].at < here - 15) g.tNext++;   // turns already passed
+      const t = g.turns[g.tNext];
+      if(t){
+        const ahead = t.at - here;
+        if(ahead <= TURN_CUE_M && !t.done){ t.done = true; turnBuzz(t.dir); }
+        const nxt = t.done ? g.turns[g.tNext + 1] : t, nAhead = nxt ? nxt.at - here : Infinity;
+        if(nxt && nAhead <= 250) text = `🗺 ${nxt.dir === 'R' ? '↱ Right' : '↰ Left'} in ${Math.max(0, Math.round(nAhead / 10) * 10)} m · ${fmtDist(left)} ${S.settings.units} to go`;
+        else if(t.done && ahead > -15) text = `🗺 ${t.dir === 'R' ? '↱ Turn right' : '↰ Turn left'} now · ${fmtDist(left)} ${S.settings.units} to go`;
+      }
+    }
   }
   $('#routeChipText').textContent = text;
 }
