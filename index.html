@@ -237,6 +237,9 @@ return maplibregl$1;
   .cand.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
   .cand .h{display:flex;align-items:center;gap:8px;font-weight:600}
   .cand .h .sw{width:12px;height:12px;border-radius:3px;margin:0}
+  .xing{font-size:12px;margin-top:3px}
+  .xing.ok{color:#a6e34f}
+  .xing.bad{color:#ffb48a}
   .route-chip{display:flex;align-items:center;gap:8px;background:var(--panel2);border:1px dashed #9aa3b5;border-radius:12px;padding:8px 10px;margin-bottom:12px;font-size:14px}
   .route-chip span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .route-chip .x{color:var(--muted);padding:2px 6px;font-size:16px}
@@ -328,9 +331,13 @@ return maplibregl$1;
           </div>
           <div class="row small" style="margin-top:8px;min-height:22px"><span class="muted" id="startInfo" style="flex:1"></span><button class="go2 hidden" id="btnSetHome">Save as Home</button></div>
           <div class="planmap" id="planMap"><div class="map-msg" id="planMsg"></div></div>
-          <div class="grid2">
-            <div class="field"><label for="rDist" id="rDistLbl">Distance (km)</label><input id="rDist" type="number" min="1" max="50" step="0.5" value="5" inputmode="decimal"></div>
-            <div class="field"><label>Terrain</label><div class="seg" id="terrSeg"><button data-terrain="flat" class="on">Flat</button><button data-terrain="rolling">Rolling</button><button data-terrain="hilly">Hilly</button></div></div>
+          <div class="field"><label for="rDist" id="rDistLbl">Distance (km)</label><input id="rDist" type="number" min="1" max="50" step="0.5" value="5" inputmode="decimal"></div>
+          <div class="field"><label>Terrain</label><div class="seg" id="terrSeg"><button data-terrain="any" class="on" title="Ignore hills, just match the distance">Any</button><button data-terrain="flat">Flat</button><button data-terrain="rolling">Rolling</button><button data-terrain="hilly">Hilly</button></div></div>
+          <div class="field" style="margin-bottom:6px">
+            <label>Avoid</label>
+            <div class="switch"><span>🚆 Crossing railroads</span><input type="checkbox" id="avoidRail"></div>
+            <div class="switch"><span>🚦 Crossing avenues</span><input type="checkbox" id="avoidAve"></div>
+            <p class="tiny muted" style="margin:4px 0 0">Railroads: at-grade train and light-rail tracks. Avenues: main roads (motorway down to secondary) plus streets named Avenida, Av., Avenue or Boulevard. Passing under or over them on a bridge or tunnel doesn't count. Routes stay on your side when possible. If you're boxed in, the loop may come out shorter, or the options with the fewest crossings are shown.</p>
           </div>
           <button class="btn btn-start" id="btnSuggest" style="width:100%">✨ Suggest routes</button>
           <div class="small muted" id="suggestStatus" style="margin-top:10px"></div>
@@ -398,7 +405,7 @@ return maplibregl$1;
           </ul>
         </div>
         <button class="btn btn-ghost" id="btnWipe" style="width:100%;color:var(--danger)">Delete all data on this device</button>
-        <p class="small muted" id="buildInfo" style="text-align:center;margin:20px 0 0;opacity:.55;font-size:11px">Running Mate · build 2026-11-05 13:40 UTC</p>
+        <p class="small muted" id="buildInfo" style="text-align:center;margin:20px 0 0;opacity:.55;font-size:11px">Running Mate · build 2026-11-05 13:52 UTC</p>
       </div>
     </section>
   </main>
@@ -1625,46 +1632,237 @@ function loopWaypoints(start, radius, bearing, n = 4){
   pts.push(start);
   return pts;
 }
-async function suggestLoops(start, targetM, terrain, onStatus){
-  const useHills = { flat: 0, rolling: 0.5, hilly: 1 }[terrain];
-  const N = 4, base = Math.random() * 360, found = [];
+// Waypoints around the start (start in the middle), used to fill the area inside barriers
+function aroundWaypoints(start, radius, n = 8, rot = 0){
+  const pts = [start];
+  for(let j = 0; j < n; j++) pts.push(dest(start, radius, (rot + j * 360 / n) % 360));
+  pts.push(start);
+  return pts;
+}
+
+/* ---- Barriers (railroads / avenues) from OpenStreetMap via Overpass ---- */
+const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+const barrierCache = new Map();
+function projector(origin){
+  const kx = Math.cos(origin[1] * Math.PI / 180) * 111320, ky = 110540;
+  return { fwd: p => [(p[0] - origin[0]) * kx, (p[1] - origin[1]) * ky], inv: q => [origin[0] + q[0] / kx, origin[1] + q[1] / ky] };
+}
+async function fetchBarriers(start, radius, kinds){
+  const key = `${start[0].toFixed(3)},${start[1].toFixed(3)},${Math.round(radius / 250)},${kinds.rail ? 1 : 0}${kinds.ave ? 1 : 0}`;
+  if(barrierCache.has(key)) return barrierCache.get(key);
+  const A = `(around:${Math.round(radius)},${start[1].toFixed(6)},${start[0].toFixed(6)})`;
+  const noBT = '["bridge"!~"."]["tunnel"!~"."]';
+  const q = `[out:json][timeout:25];(` +
+    (kinds.rail ? `way${A}["railway"~"^(rail|light_rail|narrow_gauge)$"]${noBT};` : '') +
+    (kinds.ave ? `way${A}["highway"~"^(motorway|trunk|primary|secondary)(_link)?$"]${noBT};` +
+                 `way${A}["highway"~"^(tertiary|unclassified|residential)$"]["name"~"^(avenida|av[.]|avenue|ave[.]?|boulevard|bulevar|blvd[.]?) ",i]${noBT};` : '') +
+    `);out geom qt;`;
+  let lastErr;
+  for(const url of OVERPASS){
+    try{
+      const res = await fetch(url, { method:'POST', body: new URLSearchParams({ data: q }) });
+      if(!res.ok) throw new Error('Map data server busy (' + res.status + ')');
+      const j = await res.json();
+      const P = projector(start);
+      const ways = (j.elements || []).filter(e => e.type === 'way' && e.geometry && e.geometry.length > 1).map(e => {
+        const pts = e.geometry.map(g => P.fwd([g.lon, g.lat]));
+        const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+        return { kind: e.tags && e.tags.railway ? 'rail' : 'ave', name: (e.tags && e.tags.name) || '', pts, bbox: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] };
+      });
+      const out = { origin: start, P, ways: mergeChains(ways) };
+      barrierCache.set(key, out);
+      return out;
+    }catch(e){ lastErr = e; }
+  }
+  throw new Error('Couldn’t load railroads/avenues from OpenStreetMap (' + (lastErr && lastErr.message) + '). Try again, or turn the Avoid options off.');
+}
+// OSM splits an avenue into many short ways. Join pieces that meet end-to-end (same kind,
+// going roughly straight on) into long lines, so "side of the avenue" is well defined.
+function mergeChains(ways){
+  const key = p => Math.round(p[0] * 2) + ',' + Math.round(p[1] * 2);
+  const ends = new Map();
+  for(const w of ways) for(const atStart of [true, false]){
+    const k = key(atStart ? w.pts[0] : w.pts[w.pts.length - 1]);
+    if(!ends.has(k)) ends.set(k, []);
+    ends.get(k).push({ w, atStart });
+  }
+  const used = new Set(), chains = [];
+  for(const w of ways){
+    if(used.has(w)) continue;
+    used.add(w);
+    let pts = w.pts.slice(); const names = new Set([w.name]);
+    for(const forward of [true, false]){
+      for(let guard = 0; guard < 500; guard++){
+        const endPt = forward ? pts[pts.length - 1] : pts[0], prev = forward ? pts[pts.length - 2] : pts[1];
+        const outDir = Math.atan2(endPt[1] - prev[1], endPt[0] - prev[0]);
+        let best = null, bestTurn = Infinity;
+        for(const e of ends.get(key(endPt)) || []){
+          if(used.has(e.w) || e.w.kind !== w.kind) continue;
+          const q = e.w.pts, nxt = e.atStart ? q[1] : q[q.length - 2];
+          const d = Math.atan2(nxt[1] - endPt[1], nxt[0] - endPt[0]);
+          const turn = Math.abs(((d - outDir + 3 * Math.PI) % (2 * Math.PI)) - Math.PI);
+          if(turn < bestTurn){ bestTurn = turn; best = e; }
+        }
+        if(!best || bestTurn > Math.PI / 3) break;
+        used.add(best.w); names.add(best.w.name);
+        const next = best.atStart ? best.w.pts.slice(1) : best.w.pts.slice(0, -1).reverse();
+        pts = forward ? pts.concat(next) : next.slice().reverse().concat(pts);
+      }
+    }
+    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+    chains.push({ kind: w.kind, name: [...names].filter(Boolean).join(' / '), pts, bbox: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] });
+  }
+  return chains;
+}
+const cross2 = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+function segHit(p1, p2, q1, q2){ // proper intersection → t along p1p2, else -1
+  const d1 = cross2(q1, q2, p1), d2 = cross2(q1, q2, p2), d3 = cross2(p1, p2, q1), d4 = cross2(p1, p2, q2);
+  if(((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return d1 / (d1 - d2);
+  return -1;
+}
+function nearestOnWay(p, w){ // distance and side (+1/-1) relative to nearest segment
+  let best = Infinity, side = 0;
+  for(let i = 1; i < w.pts.length; i++){
+    const a = w.pts[i-1], b = w.pts[i], dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy || 1e-9;
+    const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2));
+    const ex = a[0] + t * dx - p[0], ey = a[1] + t * dy - p[1], d = Math.hypot(ex, ey);
+    if(d < best){ best = d; side = Math.sign(cross2(a, b, p)) || 1; }
+  }
+  return { d: best, side };
+}
+// Count distinct places where the route crosses from one side of a barrier to the other.
+// Points within 3 m of the line count as "on it", so walking along an avenue or touching it isn't a crossing.
+function countCrossings(coords, B){
+  const R = coords.map(c => B.P.fwd(c));
+  const cum = [0]; for(let i = 1; i < R.length; i++) cum.push(cum[i-1] + Math.hypot(R[i][0] - R[i-1][0], R[i][1] - R[i-1][1]));
+  const xs = R.map(p => p[0]), ys = R.map(p => p[1]);
+  const rb = [Math.min(...xs) - 5, Math.min(...ys) - 5, Math.max(...xs) + 5, Math.max(...ys) + 5];
+  const events = [];
+  for(const w of B.ways){
+    if(w.bbox[0] > rb[2] || w.bbox[2] < rb[0] || w.bbox[1] > rb[3] || w.bbox[3] < rb[1]) continue;
+    const s = R.map(p => { const n = nearestOnWay(p, w); return n.d < 3 ? 0 : n.side; });
+    for(let i = 0; i < R.length - 1; i++){
+      if(s[i] !== 0 && s[i+1] !== 0){
+        if(s[i] === s[i+1]) continue;
+        for(let k = 1; k < w.pts.length; k++){
+          const t = segHit(R[i], R[i+1], w.pts[k-1], w.pts[k]);
+          if(t >= 0){ events.push({ kind: w.kind, name: w.name, at: cum[i] + t * (cum[i+1] - cum[i]), p: [R[i][0] + t * (R[i+1][0] - R[i][0]), R[i][1] + t * (R[i+1][1] - R[i][1])] }); break; }
+        }
+      } else if(s[i] !== 0 && s[i+1] === 0){
+        let j = i + 1; while(j < R.length && s[j] === 0) j++;
+        if(j < R.length && s[j] !== s[i]) events.push({ kind: w.kind, name: w.name, at: cum[i+1], p: R[i+1] });
+        i = j - 1;
+      }
+    }
+  }
+  events.sort((a, b) => a.at - b.at);
+  const merged = [];
+  for(const e of events){ const m = merged.find(x => x.kind === e.kind && Math.abs(x.at - e.at) < 40); if(!m) merged.push(e); }
+  return { rail: merged.filter(e => e.kind === 'rail').length, ave: merged.filter(e => e.kind === 'ave').length, points: merged.map(e => ({ kind: e.kind, name: e.name, ll: B.P.inv(e.p) })) };
+}
+// Distance from the start to the first barrier in a given direction (metres), or maxDist
+function firstBarrier(B, bearing, maxDist){
+  const o = [0, 0], end = B.P.fwd(dest(B.origin, maxDist, bearing));
+  let best = maxDist;
+  for(const w of B.ways){
+    if(w.bbox[0] > Math.max(0, end[0]) || w.bbox[2] < Math.min(0, end[0]) || w.bbox[1] > Math.max(0, end[1]) || w.bbox[3] < Math.min(0, end[1])) continue;
+    for(let k = 1; k < w.pts.length; k++){ const t = segHit(o, end, w.pts[k-1], w.pts[k]); if(t >= 0) best = Math.min(best, t * maxDist); }
+  }
+  return best;
+}
+// Pull any waypoint that lies across a barrier (seen from the start) back to this side
+function clipToSide(points, B){
+  const s = points[0];
+  return points.map((p, i) => {
+    if(i === 0 || i === points.length - 1) return p;
+    const d = hav(s, p); if(d < 30) return p;
+    const P = B.P.fwd(p), brg = (Math.atan2(P[0], P[1]) * 180 / Math.PI + 360) % 360;
+    const hit = firstBarrier(B, brg, d);
+    if(hit >= d) return p;
+    return dest(s, Math.max(hit * .5, hit - 45), brg);
+  });
+}
+
+async function suggestLoops(start, targetM, opts, onStatus){
+  const { terrain, avoidRail, avoidAve } = opts;
+  const useHills = { any: 0.5, flat: 0, rolling: 0.5, hilly: 1 }[terrain];
+  const avoiding = avoidRail || avoidAve;
+  let B = null;
+  if(avoiding){
+    onStatus('Loading railroads and avenues nearby…');
+    B = await fetchBarriers(start, Math.min(6000, Math.max(800, targetM / Math.PI * 1.25)), { rail: avoidRail, ave: avoidAve });
+  }
+  const base = Math.random() * 360, gens = [];
+  const nCircle = 4;
+  for(let k = 0; k < nCircle; k++){ const b = (base + k * 360 / nCircle) % 360; gens.push({ r0: targetM / (2 * Math.PI * 1.3), make: r => loopWaypoints(start, r, b) }); }
+  if(B){ gens.push({ r0: targetM / (2 * Math.PI * 1.3 + 2), make: r => aroundWaypoints(start, r, 8, base) }); gens.push({ r0: targetM / (2 * Math.PI * 1.3 + 2) * .8, make: r => aroundWaypoints(start, r, 6, base + 30) }); }
+  const attempts = B ? 2 : 3, found = [];
   let lastErr = null;
-  for(let k = 0; k < N; k++){
-    const bearing = (base + k * 360 / N) % 360;
-    let r = targetM / (2 * Math.PI * 1.3), best = null;
-    for(let attempt = 0; attempt < 3; attempt++){
-      onStatus(`Finding loop ${k + 1} of ${N}…`);
+  for(let k = 0; k < gens.length; k++){
+    let r = gens[k].r0, best = null;
+    for(let a = 0; a < attempts; a++){
+      onStatus(`Finding loop ${k + 1} of ${gens.length}…`);
+      let pts = gens[k].make(r);
+      if(B) pts = clipToSide(pts, B);
       let res;
-      try{ res = await routeVia(loopWaypoints(start, r, bearing), useHills); }
+      try{ res = await routeVia(pts, useHills); }
       catch(e){ lastErr = e; break; }
       if(!best || Math.abs(res.distance - targetM) < Math.abs(best.distance - targetM)) best = res;
       const ratio = res.distance / targetM;
       if(Math.abs(ratio - 1) < 0.1) break;
       r = r / Math.max(.4, Math.min(2.5, ratio));
     }
-    if(best && best.coords.length > 1) found.push({ ...best, bearing });
+    if(best && best.coords.length > 1) found.push(best);
   }
   if(!found.length) throw lastErr || new Error('No routes found here.');
   onStatus('Reading the terrain…');
-  for(const c of found) Object.assign(c, await analyzeRoute(c.coords));
+  for(const c of found){
+    Object.assign(c, await analyzeRoute(c.coords));
+    if(B){ c.crossings = countCrossings(c.coords, B); c.crossings.avoid = { rail: avoidRail, ave: avoidAve }; }
+  }
+  const xcount = c => !c.crossings ? 0 : (avoidRail ? c.crossings.rail : 0) + (avoidAve ? c.crossings.ave : 0);
   const score = c => {
     const gain = c.ascent / (c.distance / 1000), err = Math.abs(c.distance - targetM) / targetM;
+    if(terrain === 'any') return err * 100 + c.overlap * 5;                     // just the closest distance
     const t = terrain === 'flat' ? gain : terrain === 'hilly' ? -gain : Math.abs(gain - 12);
     return t + c.overlap * 40 + err * 30;
   };
-  return found.sort((a, b) => score(a) - score(b)).slice(0, 3);
+  return found.sort((a, b) => (xcount(a) - xcount(b)) || (score(a) - score(b))).slice(0, 3).map(c => ({ ...c, xcount: xcount(c) }));
 }
 
 /* =========================================================
    Routes view: planner map, suggestions, saved routes
    ========================================================= */
 const CAND_COLORS = ['#c8f43c', '#5ec8ff', '#ff8a3d', '#b18cff'];
-const plan = { mode: 'gps', pick: null, terrain: 'flat', cands: [], sel: 0, busy: false };
+const plan = { mode: 'gps', pick: null, terrain: 'any', cands: [], sel: 0, busy: false, prefsLoaded: false };
+function loadRoutePrefs(){
+  if(plan.prefsLoaded) return; plan.prefsLoaded = true;
+  const p = S.settings.routePrefs || {};
+  if(p.terrain) plan.terrain = p.terrain;
+  document.querySelectorAll('#terrSeg button').forEach(x => x.classList.toggle('on', x.dataset.terrain === plan.terrain));
+  if(p.dist) $('#rDist').value = p.dist;
+  $('#avoidRail').checked = !!p.avoidRail; $('#avoidAve').checked = !!p.avoidAve;
+}
+function saveRoutePrefs(){
+  S.settings.routePrefs = { terrain: plan.terrain, dist: parseFloat($('#rDist').value) || 5, avoidRail: $('#avoidRail').checked, avoidAve: $('#avoidAve').checked };
+  save('settings');
+}
+['#avoidRail', '#avoidAve', '#rDist'].forEach(id => $(id).addEventListener('change', saveRoutePrefs));
+function xingHTML(x){
+  if(!x || !x.avoid) return '';
+  const parts = [];
+  if(x.avoid.rail) parts.push(x.rail ? `railroad ${x.rail}×` : null);
+  if(x.avoid.ave) parts.push(x.ave ? `avenues ${x.ave}×` : null);
+  const bad = parts.filter(Boolean);
+  const what = [x.avoid.rail && 'railroad', x.avoid.ave && 'avenue'].filter(Boolean).join(' or ');
+  return bad.length ? `<div class="xing bad">⚠ Crosses ${bad.join(' · ')}</div>` : `<div class="xing ok">✓ No ${what} crossings</div>`;
+}
 let planMap = null, planMapReady = false, planMarker = null;
 const activeRoute = () => S.routes.find(r => r.id === S.activeRouteId) || null;
 const distUnit = () => S.settings.units === 'mi' ? 1609.344 : 1000;
 
 function openRoutesView(){
+  loadRoutePrefs();
   $('#rDistLbl').textContent = `Distance (${S.settings.units})`;
   renderRouteLib(); renderStartInfo();
   if(!planMap){
@@ -1680,6 +1878,8 @@ function openRoutesView(){
       planMap.addSource('cands', { type:'geojson', data: EMPTY_FC });
       planMap.addLayer({ id:'cands-casing', type:'line', source:'cands', layout:{'line-join':'round','line-cap':'round'}, paint:{ 'line-color':'#111', 'line-width':['case',['get','sel'],9,5], 'line-opacity':['case',['get','sel'],.55,.25] } });
       planMap.addLayer({ id:'cands-line', type:'line', source:'cands', layout:{'line-join':'round','line-cap':'round'}, paint:{ 'line-color':['get','color'], 'line-width':['case',['get','sel'],5,3], 'line-opacity':['case',['get','sel'],1,.55] } });
+      planMap.addSource('xings', { type:'geojson', data: EMPTY_FC });
+      planMap.addLayer({ id:'xings', type:'circle', source:'xings', paint:{ 'circle-radius':7, 'circle-color':['match',['get','kind'],'rail','#ff9f1a','#ff4d5e'], 'circle-stroke-color':'#fff', 'circle-stroke-width':2 } });
       planMapReady = true; drawCands(); centerPlanner();
     });
     planMap.on('click', e => { if(plan.mode === 'pick'){ plan.pick = [e.lngLat.lng, e.lngLat.lat]; renderStartInfo(); } });
@@ -1716,6 +1916,7 @@ document.querySelectorAll('#startSeg button').forEach(b => b.addEventListener('c
 document.querySelectorAll('#terrSeg button').forEach(b => b.addEventListener('click', () => {
   plan.terrain = b.dataset.terrain;
   document.querySelectorAll('#terrSeg button').forEach(x => x.classList.toggle('on', x === b));
+  saveRoutePrefs();
 }));
 $('#btnSetHome').addEventListener('click', async () => {
   const s = currentStart(); if(!s) return;
@@ -1727,6 +1928,8 @@ function drawCands(){
   if(!planMapReady) return;
   planMap.getSource('cands').setData({ type:'FeatureCollection', features: plan.cands.map((c, i) => ({ type:'Feature', properties:{ color: c.color || CAND_COLORS[i], sel: i === plan.sel }, geometry:{ type:'LineString', coordinates: c.coords } }))
     .sort((a, b) => a.properties.sel - b.properties.sel) });
+  const sel = plan.cands[plan.sel], pts = (sel && sel.crossings && sel.crossings.points) || [];
+  planMap.getSource('xings').setData({ type:'FeatureCollection', features: pts.filter(x => sel.crossings.avoid[x.kind]).map(x => ({ type:'Feature', properties:{ kind: x.kind }, geometry:{ type:'Point', coordinates: x.ll } })) });
 }
 function fitPlanner(coordsList){
   if(!planMap) return;
@@ -1744,11 +1947,18 @@ function profileSVG(profile, color = '#c8f43c', h = 46){
     <div class="row tiny muted" style="justify-content:space-between"><span>${Math.round(mn)} m</span><span>elevation</span><span>${Math.round(mx)} m</span></div>`;
 }
 const routeStats = r => `${fmtDist(r.distance)} ${S.settings.units} · ↑${r.ascent} m ↓${r.descent} m · ${terrainLabel(r.ascent, r.distance)}`;
+function routeXingShort(r){
+  const x = r.crossings; if(!x || !x.avoid) return '';
+  const n = (x.avoid.rail ? x.rail : 0) + (x.avoid.ave ? x.ave : 0);
+  const what = [x.avoid.rail && 'railroads', x.avoid.ave && 'avenues'].filter(Boolean).join(' & ');
+  return n ? ` · ⚠ ${n} crossing${n > 1 ? 's' : ''}` : ` · ✓ avoids ${what}`;
+}
 function renderSuggestions(){
   $('#suggestions').innerHTML = plan.cands.map((c, i) => `
     <div class="cand ${i === plan.sel ? 'sel' : ''}" data-cand="${i}">
       <div class="h"><i class="sw" style="background:${CAND_COLORS[i]}"></i><span style="flex:1">Option ${i + 1}</span><span class="small muted" style="font-weight:400">${c.overlap > .25 ? 'some out-and-back' : 'loop'}</span></div>
       <div class="small muted" style="margin-top:2px">${routeStats(c)}</div>
+      ${xingHTML(c.crossings)}
       ${profileSVG(c.profile, CAND_COLORS[i])}
       <div class="controls" style="margin-top:8px"><button class="btn btn-ghost btn-sm" data-cand-save="${i}">Save</button><button class="btn btn-start btn-sm" data-cand-use="${i}">Save &amp; use for next run</button></div>
     </div>`).join('');
@@ -1763,9 +1973,17 @@ $('#btnSuggest').addEventListener('click', async () => {
   const status = m => { $('#suggestStatus').innerHTML = `<span class="spin"></span>${esc(m)}`; };
   plan.cands = []; plan.sel = 0; renderSuggestions(); drawCands();
   try{
-    const res = await suggestLoops(start, target, plan.terrain, status);
+    const avoidRail = $('#avoidRail').checked, avoidAve = $('#avoidAve').checked;
+    saveRoutePrefs();
+    const res = await suggestLoops(start, target, { terrain: plan.terrain, avoidRail, avoidAve }, status);
     plan.cands = res.map((c, i) => ({ ...c, color: CAND_COLORS[i], start, terrain: plan.terrain }));
-    $('#suggestStatus').textContent = `${plan.cands.length} suggestion${plan.cands.length > 1 ? 's' : ''}, best match first. Tap one to highlight it.`;
+    let msg = `${plan.cands.length} suggestion${plan.cands.length > 1 ? 's' : ''}, best match first. Tap one to highlight it.`;
+    if(avoidRail || avoidAve){
+      const best = plan.cands[0];
+      if(best.xcount > 0) msg = `⚠ Every loop found here crosses at least once. You may be boxed in by ${[avoidRail && 'railroads', avoidAve && 'avenues'].filter(Boolean).join(' and ')}. These have the fewest crossings (marked on the map). A shorter distance may help.`;
+      else if(best.distance < target * 0.85) msg = `✓ Found loops without crossings, but the area on your side is small, so the best one is ${fmtDist(best.distance)} of ${fmtDist(target)} ${S.settings.units}. Run it twice, or allow crossings for the full distance.`;
+    }
+    $('#suggestStatus').textContent = msg;
     renderSuggestions(); drawCands(); fitPlanner(plan.cands.map(c => c.coords));
   }catch(e){
     const msg = /Failed to fetch|NetworkError|Load failed/i.test(e.message) ? 'Couldn’t reach the routing or elevation service. Check your connection and try again.' : e.message;
@@ -1779,7 +1997,8 @@ async function saveCandidate(i, use){
   if(!r.value) return;
   const route = { id: uid(), name: (r.input || def).trim() || def, created: Date.now(), start: { lon: c.start[0], lat: c.start[1] }, terrain: c.terrain,
     distance: Math.round(c.distance), ascent: c.ascent, descent: c.descent, minEle: c.minEle, maxEle: c.maxEle, engine: c.engine,
-    coords: c.coords.map(p => [+p[0].toFixed(5), +p[1].toFixed(5)]), profile: c.profile };
+    coords: c.coords.map(p => [+p[0].toFixed(5), +p[1].toFixed(5)]), profile: c.profile,
+    crossings: c.crossings ? { rail: c.crossings.rail, ave: c.crossings.ave, avoid: c.crossings.avoid, points: c.crossings.points.map(x => ({ kind: x.kind, ll: [+x.ll[0].toFixed(5), +x.ll[1].toFixed(5)] })) } : null };
   S.routes.unshift(route);
   if(use) S.activeRouteId = route.id;
   await save('routes', 'activeRouteId');
@@ -1799,7 +2018,7 @@ function renderRouteLib(){
   if(!S.routes.length){ lib.innerHTML = '<h3>My routes</h3><p class="small muted" style="margin:0">Routes you save will appear here. Select one and it shows on the Run map as a dashed line, with the distance left as you go.</p>'; return; }
   lib.innerHTML = '<h3>My routes</h3>' + S.routes.map(r => `
     <div class="route-item">
-      <div class="top"><div class="info"><div class="n">${esc(r.name)}</div><div class="small muted">${routeStats(r)}</div></div>
+      <div class="top"><div class="info"><div class="n">${esc(r.name)}</div><div class="small muted">${routeStats(r)}${routeXingShort(r)}</div></div>
         ${r.id === S.activeRouteId ? '<span class="pill on">Selected</span>' : `<button class="go" data-route-use="${r.id}">Select</button>`}
         <button class="menu-btn" data-route-menu="${r.id}" aria-label="Route options">⋯</button></div>
       ${profileSVG(r.profile, r.id === S.activeRouteId ? '#c8f43c' : '#9aa3b5', 34)}
