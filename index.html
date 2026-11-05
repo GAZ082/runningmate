@@ -292,7 +292,7 @@ return maplibregl$1;
           <div class="bar" id="phaseBar"></div>
           <div class="bar-prog"><i id="phaseProg"></i></div>
         </div>
-        <div class="route-chip hidden" id="routeChip"><span id="routeChipText"></span><button class="x" id="routeChipX" title="Stop following this route" aria-label="Clear route">✕</button></div>
+        <div class="route-chip hidden" id="routeChip"><span id="routeChipText"></span><button class="x" id="routeChipVib" title="Turn vibrations on/off" aria-label="Turn vibrations on or off">📳</button><button class="x" id="routeChipX" title="Stop following this route" aria-label="Clear route">✕</button></div>
         <div class="stats">
           <div class="stat big"><div class="v num" id="sTime">0:00</div><div class="k">Time</div></div>
           <div class="stat"><div class="v num" id="sDist">0.00</div><div class="k" id="sDistK">Distance (km)</div></div>
@@ -425,7 +425,7 @@ return maplibregl$1;
           </ul>
         </div>
         <button class="btn btn-ghost" id="btnWipe" style="width:100%;color:var(--danger)">Delete all data on this device</button>
-        <p class="small muted" id="buildInfo" style="text-align:center;margin:20px 0 0;opacity:.55;font-size:11px">Running Mate · build 2026-11-05 14:58 UTC</p>
+        <p class="small muted" id="buildInfo" style="text-align:center;margin:20px 0 0;opacity:.55;font-size:11px">Running Mate · build 2026-11-05 15:00 UTC</p>
       </div>
     </section>
   </main>
@@ -2466,10 +2466,23 @@ function detectTurns(pts){
   const end = pts[pts.length - 1][2];
   return turns.filter(t => t.at > 15 && t.at < end - 15);
 }
+// Turn cues are vibration only: no beeps, no voice.
 function turnBuzz(dir){
   if(S.settings.turnVibe === false || !navigator.vibrate) return;
   try{ navigator.vibrate(dir === 'R' ? [500] : [500, 250, 500]); }catch{}
 }
+function renderTurnVibeBtn(){
+  const on = S.settings.turnVibe !== false, b = $('#routeChipVib');
+  b.textContent = on ? '📳' : '📴'; b.style.opacity = on ? '1' : '.55';
+  b.title = on ? 'Turn vibrations: on (tap to turn off)' : 'Turn vibrations: off (tap to turn on)';
+  $('#setTurnVibe').checked = on;
+}
+$('#routeChipVib').addEventListener('click', async () => {
+  S.settings.turnVibe = S.settings.turnVibe === false;
+  await save('settings'); renderTurnVibeBtn();
+  toast(S.settings.turnVibe ? 'Turn vibrations on' : 'Turn vibrations off');
+});
+$('#setTurnVibe').addEventListener('change', async () => { S.settings.turnVibe = $('#setTurnVibe').checked; await save('settings'); renderTurnVibeBtn(); });
 $('#testRight').addEventListener('click', () => { if(!navigator.vibrate){ toast('This browser can’t vibrate (iPhones don’t support it)'); return; } navigator.vibrate([500]); });
 $('#testLeft').addEventListener('click', () => { if(!navigator.vibrate){ toast('This browser can’t vibrate (iPhones don’t support it)'); return; } navigator.vibrate([500, 250, 500]); });
 function addGuideLayer(m){
@@ -2557,7 +2570,7 @@ if(isServed && 'serviceWorker' in navigator){
   initMap();
   restoreLive();
   startGps();
-  setGuideFromActive();
+  setGuideFromActive(); renderTurnVibeBtn();
   updateButtons(); renderPhase(); tick(); renderPlan(); renderInstall();
   const startView = location.hash.slice(1); // app shortcuts: #plan, #history
   if(['plan','routes','history','settings'].includes(startView)) showView(startView);
