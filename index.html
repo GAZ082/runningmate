@@ -229,6 +229,26 @@ return maplibregl$1;
   .switch input{width:22px}
   .maplibregl-ctrl-attrib{font-size:10px}
 
+  .seg{display:flex;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
+  .seg button{flex:1;padding:8px 4px;border-radius:8px;font-size:13px;font-weight:600;color:var(--muted);white-space:nowrap}
+  .seg button.on{background:var(--accent);color:var(--accent-ink)}
+  .planmap{height:270px;border-radius:12px;overflow:hidden;margin:10px 0 12px;background:#1a1d24;position:relative}
+  .cand{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-top:10px;cursor:pointer;background:var(--panel2)}
+  .cand.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+  .cand .h{display:flex;align-items:center;gap:8px;font-weight:600}
+  .cand .h .sw{width:12px;height:12px;border-radius:3px;margin:0}
+  .route-chip{display:flex;align-items:center;gap:8px;background:var(--panel2);border:1px dashed #9aa3b5;border-radius:12px;padding:8px 10px;margin-bottom:12px;font-size:14px}
+  .route-chip span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .route-chip .x{color:var(--muted);padding:2px 6px;font-size:16px}
+  .route-item{padding:12px 0;border-top:1px solid var(--line)}
+  .route-item:first-of-type{border-top:0}
+  .route-item .top{display:flex;gap:10px;align-items:center}
+  .route-item .info{flex:1;min-width:0}
+  .route-item .n{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tiny{font-size:11px;line-height:1.45}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px;margin-right:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
   @media (min-width:900px){
     #view-run.active{flex-direction:row}
     #view-run .panel{width:400px;border-top:0;border-left:1px solid var(--line);overflow:auto}
@@ -267,6 +287,7 @@ return maplibregl$1;
           <div class="bar" id="phaseBar"></div>
           <div class="bar-prog"><i id="phaseProg"></i></div>
         </div>
+        <div class="route-chip hidden" id="routeChip"><span id="routeChipText"></span><button class="x" id="routeChipX" title="Stop following this route" aria-label="Clear route">✕</button></div>
         <div class="stats">
           <div class="stat big"><div class="v num" id="sTime">0:00</div><div class="k">Time</div></div>
           <div class="stat"><div class="v num" id="sDist">0.00</div><div class="k" id="sDistK">Distance (km)</div></div>
@@ -289,6 +310,34 @@ return maplibregl$1;
         <p class="sub">Plans come from Claude (copy a prompt, paste the answer back). Each session is split into timed phases, and Running Mate tells you when to switch.</p>
         <div id="planOut"></div>
         <div class="card" id="planLib"></div>
+      </div>
+    </section>
+
+    <!-- ROUTES -->
+    <section class="view" id="view-routes">
+      <div class="page">
+        <h2>Routes</h2>
+        <p class="sub">Get loop suggestions from home or wherever you are, matched to your distance and how hilly you want it. Save the ones you like and pick one before a run.</p>
+        <div class="card">
+          <h3>Suggest a loop</h3>
+          <label style="margin-top:10px">Start from</label>
+          <div class="seg" id="startSeg">
+            <button data-smode="gps" class="on">📍 Here</button>
+            <button data-smode="home">🏠 Home</button>
+            <button data-smode="pick">👆 Pick on map</button>
+          </div>
+          <div class="row small" style="margin-top:8px;min-height:22px"><span class="muted" id="startInfo" style="flex:1"></span><button class="go2 hidden" id="btnSetHome">Save as Home</button></div>
+          <div class="planmap" id="planMap"><div class="map-msg" id="planMsg"></div></div>
+          <div class="grid2">
+            <div class="field"><label for="rDist" id="rDistLbl">Distance (km)</label><input id="rDist" type="number" min="1" max="50" step="0.5" value="5" inputmode="decimal"></div>
+            <div class="field"><label>Terrain</label><div class="seg" id="terrSeg"><button data-terrain="flat" class="on">Flat</button><button data-terrain="rolling">Rolling</button><button data-terrain="hilly">Hilly</button></div></div>
+          </div>
+          <button class="btn btn-start" id="btnSuggest" style="width:100%">✨ Suggest routes</button>
+          <div class="small muted" id="suggestStatus" style="margin-top:10px"></div>
+          <div id="suggestions"></div>
+          <p class="tiny muted" style="margin:12px 0 0">Routes: <a href="https://valhalla.openstreetmap.de" target="_blank" rel="noopener">Valhalla</a> / OSRM by FOSSGIS, from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap</a> contributors (ODbL). Elevation: <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener">Mapzen Terrain Tiles</a> on AWS Open Data (SRTM, 3DEP, GMTED, ETOPO1). Suggestions follow mapped paths, so check they're safe and open before you run.</p>
+        </div>
+        <div class="card" id="routeLib"></div>
       </div>
     </section>
 
@@ -349,7 +398,7 @@ return maplibregl$1;
           </ul>
         </div>
         <button class="btn btn-ghost" id="btnWipe" style="width:100%;color:var(--danger)">Delete all data on this device</button>
-        <p class="small muted" id="buildInfo" style="text-align:center;margin:20px 0 0;opacity:.55;font-size:11px">Running Mate · build 2026-11-05 13:23 UTC</p>
+        <p class="small muted" id="buildInfo" style="text-align:center;margin:20px 0 0;opacity:.55;font-size:11px">Running Mate · build 2026-11-05 13:40 UTC</p>
       </div>
     </section>
   </main>
@@ -357,6 +406,7 @@ return maplibregl$1;
   <nav>
     <button class="active" data-view="run"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="15" cy="4" r="2"/><path d="M8 21l3-6 3 2v5M6 12l3-4 4 1 3 3 3 1M11 15l2-6"/></svg>Run</button>
     <button data-view="plan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M8 14h3M8 17h6"/></svg>Training</button>
+    <button data-view="routes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6-5.3-6-10a6 6 0 0 1 12 0c0 4.7-6 10-6 10z"/><circle cx="12" cy="11" r="2.2"/></svg>Routes</button>
     <button data-view="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19c3 0 4-5 7-9s6-6 9-6"/><circle cx="4" cy="19" r="2"/><circle cx="20" cy="4" r="2"/></svg>History</button>
     <button data-view="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>Settings</button>
   </nav>
@@ -554,9 +604,9 @@ const DB = {
     try{ localStorage.setItem('rm2.' + k, JSON.stringify(v)); return Promise.resolve(true); }catch{ toast('Could not save: storage is full or unavailable'); return Promise.resolve(false); }
   }
 };
-const DEFAULT_SETTINGS = { units:'km', voice:true, vibe:true, wake:true, style:'https://tiles.openfreemap.org/styles/liberty' };
-const S = { settings: { ...DEFAULT_SETTINGS }, plans: [], activePlanId: null, done: {}, history: [], live: null };
-const KEYS = ['settings','plans','activePlanId','done','history','live'];
+const DEFAULT_SETTINGS = { units:'km', voice:true, vibe:true, wake:true, style:'https://tiles.openfreemap.org/styles/liberty', home:null };
+const S = { settings: { ...DEFAULT_SETTINGS }, plans: [], activePlanId: null, done: {}, history: [], live: null, routes: [], activeRouteId: null };
+const KEYS = ['settings','plans','activePlanId','done','history','live','routes','activeRouteId'];
 const save = (...keys) => Promise.all(keys.map(k => DB.set(k, S[k])));
 async function loadState(){
   for(const k of KEYS){ const v = await DB.get(k); if(v !== undefined) S[k] = v; }
@@ -613,6 +663,7 @@ function showView(v){
   if(v === 'history') renderHistory();
   if(v === 'plan') renderPlan();
   if(v === 'settings') renderDataSummary();
+  if(v === 'routes') openRoutesView();
 }
 
 /* =========================================================
@@ -657,7 +708,7 @@ function makeMap(container, msgEl){
 function initMap(){
   map = makeMap('map', $('#mapMsg'));
   if(!map) return;
-  map.on('load', () => { addRouteLayers(map); mapReady = true; drawRoute(); if(lastFix) centerOn(lastFix, true); });
+  map.on('load', () => { addRouteLayers(map); addGuideLayer(map); mapReady = true; drawRoute(); drawGuide(); if(lastFix && !activeRoute()) centerOn(lastFix, true); });
   map.on('dragstart', () => { follow = false; });
   const el = document.createElement('div'); el.className = 'me';
   meMarker = new maplibregl.Marker({ element: el });
@@ -710,6 +761,8 @@ function onPos(pos){
   setGps(acc <= 15 ? 'ok' : acc <= MAX_ACC ? 'weak' : 'bad', `±${acc} m`);
   if(meMarker && map) meMarker.setLngLat([pt[0], pt[1]]).addTo(map);
   if(follow && mapReady) centerOn(pt, map.getZoom() < 3);
+  if(plan.mode === 'gps' && $('#view-routes').classList.contains('active')){ const first = !$('#startInfo').textContent.startsWith('Starting'); renderStartInfo(); if(first) centerPlanner(); }
+  if(run.status === 'running' && c.accuracy <= MAX_ACC * 1.5) updateRouteChip(pt);
   if(run.status !== 'running' || c.accuracy > MAX_ACC) return;
   const seg = run.segments[run.segments.length - 1];
   const prev = seg[seg.length - 1];
@@ -746,6 +799,8 @@ $('#btnStart').addEventListener('click', () => {
   unlockAudio();
   if(run.status === 'idle'){
     Object.assign(run, { accMs:0, startedAt:Date.now(), segments:[[]], distance:0, points:0, phaseIdx:-1, beepAt:-1, finished:false });
+    const ar = activeRoute(); run.route = ar ? { id: ar.id, name: ar.name, distance: ar.distance } : null;
+    if(guideCache) guideCache.idx = 0;
     if(run.session) say('Starting ' + run.session.title);
   } else if(run.status === 'paused'){
     run.segments.push([]); say('Resumed');
@@ -784,7 +839,8 @@ $('#sumSave').addEventListener('click', async () => {
     id: uid(), date: run.startedAt, duration: Math.round(t), distance: Math.round(run.distance),
     segments: run.segments.filter(x => x.length),
     session: s ? { planId: s.planId, planName: s.planName, sessionId: s.sessionId, title: s.title, phases: s.phases } : null,
-    completed: !!(s && $('#sumDone').checked), note: $('#sumNote').value.trim()
+    completed: !!(s && $('#sumDone').checked), note: $('#sumNote').value.trim(),
+    route: run.route || null
   };
   S.history.unshift(rec);
   if(rec.completed && s.planId){ (S.done[s.planId] ||= {})[s.sessionId] = rec.id; }
@@ -794,8 +850,8 @@ $('#sumSave').addEventListener('click', async () => {
   resetRun(); toast('Run saved with its path 🎉');
 });
 function resetRun(){
-  Object.assign(run, { status:'idle', accMs:0, segments:[], distance:0, points:0, phaseIdx:-1, beepAt:-1, finished:false, session:null });
-  S.live = null; save('live'); releaseWake(); drawRoute(); updateButtons(); renderPhase(); tick();
+  Object.assign(run, { status:'idle', accMs:0, segments:[], distance:0, points:0, phaseIdx:-1, beepAt:-1, finished:false, session:null, route:null });
+  S.live = null; save('live'); releaseWake(); drawRoute(); updateButtons(); renderPhase(); tick(); updateRouteChip();
 }
 function updateButtons(){
   const s = run.status, b = $('#btnStart');
@@ -804,6 +860,7 @@ function updateButtons(){
   $('#btnPause').classList.toggle('hidden', s !== 'running');
   $('#btnStop').classList.toggle('hidden', s === 'idle');
   $('#clearSession').classList.toggle('hidden', s !== 'idle');
+  $('#routeChipX').classList.toggle('hidden', s !== 'idle');
 }
 function statHTML(t, d){
   const u = S.settings.units;
@@ -1260,6 +1317,7 @@ function renderHistory(){
         <div class="d">${fmtDate(r.date)} · ${new Date(r.date).toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit' })}</div>
         <div class="small muted">${fmtDist(r.distance)} ${u} · ${fmtTime(r.duration)} · ${fmtPace(paceOf(r.duration, r.distance))} /${u}</div>
         ${r.session ? `<div class="small" style="margin-top:2px">${r.completed ? '✓ ' : ''}${esc(r.session.title)}</div>` : ''}
+        ${r.route ? `<div class="small muted" style="margin-top:2px">🗺 ${esc(r.route.name)}</div>` : ''}
       </div>
       <span class="muted">›</span>
     </div>`).join('') : '<div class="empty">No runs yet. Go to Run and press Start.</div>';
@@ -1283,7 +1341,8 @@ function openHist(id){
   histCurrent = r;
   const u = S.settings.units;
   $('#hmTitle').textContent = fmtDate(r.date, { weekday:'short', day:'numeric', month:'short' }) + ' · ' + new Date(r.date).toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit' });
-  $('#hmSession').innerHTML = r.session ? `${r.completed ? '✓ ' : ''}<b>${esc(r.session.title)}</b>${r.session.planName ? ' <span class="muted">· ' + esc(r.session.planName) + '</span>' : ''}` : '<span class="muted">Free run</span>';
+  $('#hmSession').innerHTML = (r.session ? `${r.completed ? '✓ ' : ''}<b>${esc(r.session.title)}</b>${r.session.planName ? ' <span class="muted">· ' + esc(r.session.planName) + '</span>' : ''}` : '<span class="muted">Free run</span>')
+    + (r.route ? `<div class="muted" style="margin-top:2px">🗺 Route: ${esc(r.route.name)} (dashed line)</div>` : '');
   $('#hmStats').innerHTML = statHTML(r.duration, r.distance);
   $('#hmNote').textContent = r.note ? '“' + r.note + '”' : '';
   const sp = phaseSplits(r);
@@ -1297,6 +1356,8 @@ function openHist(id){
   const show = () => {
     histMap.resize();
     histMap.getSource('route').setData(routeFC(r.segments, r.session && r.session.phases));
+    const planned = r.route && S.routes.find(x => x.id === r.route.id);
+    histMap.getSource('guide').setData(planned ? lineFC(planned.coords) : EMPTY_FC);
     if(pts.length){
       const b = pts.reduce((bb, p) => bb.extend([p[0], p[1]]), new maplibregl.LngLatBounds([pts[0][0], pts[0][1]], [pts[0][0], pts[0][1]]));
       histMap.fitBounds(b, { padding: 40, maxZoom: 17, duration: 0 });
@@ -1307,7 +1368,7 @@ function openHist(id){
     $('#histMap').innerHTML = '';
     histMap = makeMap('histMap', null);
     if(!histMap){ $('#histMap').innerHTML = '<div class="empty">Map unavailable</div>'; return; }
-    histMap.on('load', () => { addRouteLayers(histMap); histMapReady = true; show(); });
+    histMap.on('load', () => { addRouteLayers(histMap); addGuideLayer(histMap); histMapReady = true; show(); });
   } else if(histMapReady) setTimeout(show, 30);
 }
 $('#hmClose').addEventListener('click', () => $('#histModal').classList.remove('show'));
@@ -1332,11 +1393,11 @@ $('#hmGpx').addEventListener('click', () => {
    Backup: export / import everything
    ========================================================= */
 const BACKUP_FORMAT = 'running-mate-backup/1';
-function backupObject(){ return { format: BACKUP_FORMAT, app:'Running Mate', exported: new Date().toISOString(), settings: S.settings, plans: S.plans, activePlanId: S.activePlanId, done: S.done, history: S.history }; }
+function backupObject(){ return { format: BACKUP_FORMAT, app:'Running Mate', exported: new Date().toISOString(), settings: S.settings, plans: S.plans, activePlanId: S.activePlanId, done: S.done, history: S.history, routes: S.routes, activeRouteId: S.activeRouteId }; }
 function renderDataSummary(){
   const pts = S.history.reduce((a, r) => a + r.segments.reduce((b, s) => b + s.length, 0), 0);
   const kb = Math.round(JSON.stringify(backupObject()).length / 1024);
-  $('#dataSummary').textContent = `On this device: ${S.history.length} run${S.history.length === 1 ? '' : 's'} (${pts.toLocaleString()} GPS points), ${S.plans.length} plan${S.plans.length === 1 ? '' : 's'}. Backup size about ${kb} KB.`;
+  $('#dataSummary').textContent = `On this device: ${S.history.length} run${S.history.length === 1 ? '' : 's'} (${pts.toLocaleString()} GPS points), ${S.plans.length} plan${S.plans.length === 1 ? '' : 's'}, ${S.routes.length} saved route${S.routes.length === 1 ? '' : 's'}. Backup size about ${kb} KB.`;
 }
 $('#btnExport').addEventListener('click', () => {
   if(download(JSON.stringify(backupObject()), `running-mate-backup-${new Date().toISOString().slice(0, 10)}.json`, 'application/json')) toast('Backup saved to your downloads');
@@ -1366,26 +1427,30 @@ async function importText(text){
   }
   const history = raw.history.filter(r => r && r.id && Array.isArray(r.segments) && isFinite(r.date));
   const plans = raw.plans.filter(p => p && p.id && Array.isArray(p.weeks));
+  const routes = (Array.isArray(raw.routes) ? raw.routes : []).filter(x => x && x.id && Array.isArray(x.coords) && x.coords.length > 1);
   const r = await dialog({ title:'Import backup',
-    html:`<p class="small" style="margin:0 0 8px">Backup from <b>${raw.exported ? new Date(raw.exported).toLocaleString() : 'unknown date'}</b>: ${history.length} runs, ${plans.length} plans.</p>
+    html:`<p class="small" style="margin:0 0 8px">Backup from <b>${raw.exported ? new Date(raw.exported).toLocaleString() : 'unknown date'}</b>: ${history.length} runs, ${plans.length} plans, ${routes.length} routes.</p>
           <p class="small muted" style="margin:0"><b>Merge</b> adds what's missing and keeps everything here. <b>Replace</b> deletes this device's data and uses the backup instead.</p>`,
     buttons:[{ label:'Cancel', value:null }, { label:'Replace', value:'replace', cls:'btn-stop' }, { label:'Merge', value:'merge', cls:'btn-start' }] });
   if(!r.value) return;
   if(r.value === 'replace'){
     if(run.status !== 'idle'){ toast('Finish your current run first'); return; }
-    Object.assign(S, { settings: { ...DEFAULT_SETTINGS, ...(raw.settings || {}) }, plans, activePlanId: raw.activePlanId || (plans[0] && plans[0].id) || null, done: raw.done || {}, history });
+    Object.assign(S, { settings: { ...DEFAULT_SETTINGS, ...(raw.settings || {}) }, plans, activePlanId: raw.activePlanId || (plans[0] && plans[0].id) || null, done: raw.done || {}, history, routes, activeRouteId: routes.some(x => x.id === raw.activeRouteId) ? raw.activeRouteId : null });
   } else {
-    const hIds = new Set(S.history.map(x => x.id)), pIds = new Set(S.plans.map(x => x.id));
+    const hIds = new Set(S.history.map(x => x.id)), pIds = new Set(S.plans.map(x => x.id)), rIds = new Set(S.routes.map(x => x.id));
     let addedR = 0, addedP = 0;
     history.forEach(x => { if(!hIds.has(x.id)){ S.history.push(x); addedR++; } });
     plans.forEach(x => { if(!pIds.has(x.id)){ S.plans.push(x); addedP++; } });
+    routes.forEach(x => { if(!rIds.has(x.id)) S.routes.push(x); });
+    if(!S.settings.home && raw.settings && raw.settings.home) S.settings.home = raw.settings.home;
     S.history.sort((a, b) => b.date - a.date);
     for(const pid in (raw.done || {})){ S.done[pid] = { ...(raw.done[pid] || {}), ...(S.done[pid] || {}) }; }
     if(!S.activePlanId && raw.activePlanId) S.activePlanId = raw.activePlanId;
     toast(`Added ${addedR} runs and ${addedP} plans`, 3200);
   }
-  await save('settings', 'plans', 'activePlanId', 'done', 'history');
+  await save('settings', 'plans', 'activePlanId', 'done', 'history', 'routes', 'activeRouteId');
   loadSettingsForm(); applyUnitLabels(); renderDataSummary(); $('#backupText').value = '';
+  setGuideFromActive(); renderRouteLib();
   if(r.value === 'replace') toast('Backup restored');
 }
 
@@ -1403,8 +1468,9 @@ $('#btnSaveSettings').addEventListener('click', async () => {
   await save('settings'); applyUnitLabels(); tick(); renderDataSummary();
   if(styleChanged && map){
     mapReady = false; map.setStyle(style);
-    map.once('style.load', () => { addRouteLayers(map); mapReady = true; drawRoute(); });
+    map.once('style.load', () => { addRouteLayers(map); addGuideLayer(map); mapReady = true; drawRoute(); drawGuide(); });
     if(histMap){ histMap.remove(); histMap = null; histMapReady = false; }
+    if(planMap){ planMap.remove(); planMap = null; planMapReady = false; }
   }
   unlockAudio(); if(S.settings.voice) say('Settings saved');
   toast('Settings saved');
@@ -1412,11 +1478,400 @@ $('#btnSaveSettings').addEventListener('click', async () => {
 $('#btnWipe').addEventListener('click', async () => {
   const r = await dialog({ title:'Delete everything?', html:'<p class="small muted" style="margin:0">All runs, paths, plans and settings on this device will be erased. Export a backup first if you want to keep them.</p>', buttons:[{ label:'Cancel', value:false }, { label:'Delete all', value:true, cls:'btn-stop' }] });
   if(!r.value) return;
-  Object.assign(S, { settings: { ...DEFAULT_SETTINGS }, plans: [], activePlanId: null, done: {}, history: [], live: null });
+  Object.assign(S, { settings: { ...DEFAULT_SETTINGS }, plans: [], activePlanId: null, done: {}, history: [], live: null, routes: [], activeRouteId: null });
   await save(...KEYS);
   try{ ['rm.history','rm.plan','rm.done','rm.settings','rm.live'].forEach(k => localStorage.removeItem(k)); }catch{}
   location.reload();
 });
+
+/* =========================================================
+   Routes: geometry helpers
+   ========================================================= */
+const EMPTY_FC = { type:'FeatureCollection', features: [] };
+const lineFC = coords => ({ type:'FeatureCollection', features: coords && coords.length > 1 ? [{ type:'Feature', properties:{}, geometry:{ type:'LineString', coordinates: coords } }] : [] });
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function dest([lon, lat], m, brg){
+  const R = 6371008.8, d = m / R, b = brg * Math.PI / 180, f1 = lat * Math.PI / 180, l1 = lon * Math.PI / 180;
+  const f2 = Math.asin(Math.sin(f1) * Math.cos(d) + Math.cos(f1) * Math.sin(d) * Math.cos(b));
+  const l2 = l1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(f1), Math.cos(d) - Math.sin(f1) * Math.sin(f2));
+  return [((l2 * 180 / Math.PI) + 540) % 360 - 180, f2 * 180 / Math.PI];
+}
+function decodePolyline(str, precision = 6){
+  const f = Math.pow(10, precision), out = []; let i = 0, lat = 0, lon = 0;
+  while(i < str.length){
+    for(const k of [0, 1]){
+      let b, shift = 0, res = 0;
+      do{ b = str.charCodeAt(i++) - 63; res |= (b & 0x1f) << shift; shift += 5; }while(b >= 0x20);
+      const d = (res & 1) ? ~(res >> 1) : (res >> 1);
+      if(k === 0) lat += d; else lon += d;
+    }
+    out.push([lon / f, lat / f]);
+  }
+  return out;
+}
+function pathLength(coords){ let d = 0; for(let i = 1; i < coords.length; i++) d += hav(coords[i-1], coords[i]); return d; }
+// Points every `step` metres along a line: [lon, lat, distanceFromStart]
+function resample(coords, step){
+  const out = [[coords[0][0], coords[0][1], 0]]; let acc = 0, next = step;
+  for(let i = 1; i < coords.length; i++){
+    const a = coords[i-1], b = coords[i], seg = hav(a, b);
+    while(seg > 0 && acc + seg >= next){
+      const t = (next - acc) / seg;
+      out.push([a[0] + (b[0]-a[0]) * t, a[1] + (b[1]-a[1]) * t, next]);
+      next += step;
+    }
+    acc += seg;
+  }
+  const last = coords[coords.length - 1];
+  if(acc - out[out.length-1][2] > 1) out.push([last[0], last[1], acc]);
+  return out;
+}
+
+/* =========================================================
+   Elevation: Mapzen Terrain Tiles (AWS Open Data, terrarium PNG)
+   elevation = (R * 256 + G + B / 256) - 32768
+   ========================================================= */
+const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+const DEM_Z = 13; // ~19 m per pixel at the equator, finer towards the poles
+const demCache = new Map();
+function demTile(x, y){
+  const key = x + '/' + y;
+  if(demCache.has(key)) return demCache.get(key);
+  const p = (async () => {
+    const res = await fetch(DEM_URL.replace('{z}', DEM_Z).replace('{x}', x).replace('{y}', y), { mode:'cors' });
+    if(!res.ok) throw new Error('Elevation data unavailable (' + res.status + ')');
+    const bmp = await createImageBitmap(await res.blob());
+    const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+    const g = c.getContext('2d', { willReadFrequently:true }); g.drawImage(bmp, 0, 0);
+    return g.getImageData(0, 0, c.width, c.height);
+  })();
+  demCache.set(key, p); p.catch(() => demCache.delete(key));
+  return p;
+}
+async function elevAt(lon, lat){
+  const n = 2 ** DEM_Z * 256, s = Math.sin(lat * Math.PI / 180);
+  const px = (lon + 180) / 360 * n - .5, py = (.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n - .5;
+  const x0 = Math.floor(px), y0 = Math.floor(py), fx = px - x0, fy = py - y0;
+  const v = async (X, Y) => {
+    const tx = Math.floor(X / 256), ty = Math.floor(Y / 256), img = await demTile(tx, ty);
+    const i = ((Y - ty * 256) * img.width + (X - tx * 256)) * 4, d = img.data;
+    return d[i] * 256 + d[i+1] + d[i+2] / 256 - 32768;
+  };
+  const [a, b, c, d] = await Promise.all([v(x0, y0), v(x0 + 1, y0), v(x0, y0 + 1), v(x0 + 1, y0 + 1)]);
+  return a * (1-fx) * (1-fy) + b * fx * (1-fy) + c * (1-fx) * fy + d * fx * fy;
+}
+// Elevation profile, climb/descent and how much of the loop retraces itself
+async function analyzeRoute(coords){
+  const pts = resample(coords, 25);
+  const raw = await Promise.all(pts.map(p => elevAt(p[0], p[1])));
+  const el = raw.map((_, i) => { let s = 0, n = 0; for(let k = Math.max(0, i-2); k <= Math.min(raw.length-1, i+2); k++){ s += raw[k]; n++; } return s / n; });
+  let up = 0, down = 0, ref = el[0];
+  for(const e of el){ if(e - ref >= 2){ up += e - ref; ref = e; } else if(ref - e >= 2){ down += ref - e; ref = e; } }
+  let over = 0;
+  for(let i = 0; i < pts.length; i++) for(let j = 0; j < i - 8; j++) if(hav(pts[i], pts[j]) < 12){ over++; break; }
+  const stepK = Math.max(1, Math.ceil(pts.length / 120));
+  const profile = [];
+  pts.forEach((p, i) => { if(i % stepK === 0 || i === pts.length - 1) profile.push([Math.round(p[2]), Math.round(el[i] * 10) / 10]); });
+  return { ascent: Math.round(up), descent: Math.round(down), minEle: Math.round(Math.min(...el)), maxEle: Math.round(Math.max(...el)), overlap: over / pts.length, profile };
+}
+const terrainLabel = (ascent, m) => { const g = ascent / Math.max(.5, m / 1000); return g < 6 ? 'Flat' : g < 15 ? 'Rolling' : 'Hilly'; };
+
+/* =========================================================
+   Routing: FOSSGIS Valhalla (pedestrian), OSRM foot as fallback.
+   Their usage policy allows max 1 request/second.
+   ========================================================= */
+let lastRouteReq = 0;
+async function politeFetch(url){
+  const wait = lastRouteReq + 1150 - Date.now();
+  if(wait > 0) await sleep(wait);
+  lastRouteReq = Date.now();
+  return fetch(url);
+}
+async function valhallaRoute(points, useHills){
+  const req = {
+    locations: points.map(p => ({ lon: +p[0].toFixed(6), lat: +p[1].toFixed(6), type:'break' })),
+    costing: 'pedestrian',
+    costing_options: { pedestrian: { use_hills: useHills, use_tracks: 0.6, use_living_streets: 0.6, walkway_factor: 0.9, sidewalk_factor: 0.95, alley_factor: 2, use_ferry: 0 } },
+    directions_type: 'none', units: 'kilometers'
+  };
+  const res = await politeFetch('https://valhalla1.openstreetmap.de/route?json=' + encodeURIComponent(JSON.stringify(req)));
+  let j = null; try{ j = await res.json(); }catch{}
+  if(!res.ok || !j || !j.trip){ const e = new Error((j && (j.error || j.status_message)) || ('Routing server error ' + res.status)); e.status = res.status; throw e; }
+  const coords = j.trip.legs.flatMap((l, i) => { const c = decodePolyline(l.shape, 6); return i ? c.slice(1) : c; });
+  return { coords, distance: j.trip.summary.length * 1000, engine: 'Valhalla' };
+}
+async function osrmRoute(points){
+  const c = points.map(p => p[0].toFixed(6) + ',' + p[1].toFixed(6)).join(';');
+  const res = await politeFetch(`https://routing.openstreetmap.de/routed-foot/route/v1/driving/${c}?overview=full&geometries=polyline6`);
+  const j = await res.json();
+  if(j.code !== 'Ok' || !j.routes || !j.routes[0]) throw new Error(j.message || 'Routing failed');
+  return { coords: decodePolyline(j.routes[0].geometry, 6), distance: j.routes[0].distance, engine: 'OSRM' };
+}
+let useOsrmOnly = false;
+async function routeVia(points, useHills){
+  if(!useOsrmOnly){
+    try{ return await valhallaRoute(points, useHills); }
+    catch(e){
+      if(e.status && e.status < 500 && e.status !== 429) throw e;   // a real "no route" answer
+      useOsrmOnly = true;                                          // server down / unreachable
+    }
+  }
+  return osrmRoute(points);
+}
+// Waypoints on a circle that passes through the start, so the route comes back home
+function loopWaypoints(start, radius, bearing, n = 4){
+  const center = dest(start, radius, bearing), pts = [start];
+  for(let j = 1; j < n; j++) pts.push(dest(center, radius, (bearing + 180 + j * 360 / n) % 360));
+  pts.push(start);
+  return pts;
+}
+async function suggestLoops(start, targetM, terrain, onStatus){
+  const useHills = { flat: 0, rolling: 0.5, hilly: 1 }[terrain];
+  const N = 4, base = Math.random() * 360, found = [];
+  let lastErr = null;
+  for(let k = 0; k < N; k++){
+    const bearing = (base + k * 360 / N) % 360;
+    let r = targetM / (2 * Math.PI * 1.3), best = null;
+    for(let attempt = 0; attempt < 3; attempt++){
+      onStatus(`Finding loop ${k + 1} of ${N}…`);
+      let res;
+      try{ res = await routeVia(loopWaypoints(start, r, bearing), useHills); }
+      catch(e){ lastErr = e; break; }
+      if(!best || Math.abs(res.distance - targetM) < Math.abs(best.distance - targetM)) best = res;
+      const ratio = res.distance / targetM;
+      if(Math.abs(ratio - 1) < 0.1) break;
+      r = r / Math.max(.4, Math.min(2.5, ratio));
+    }
+    if(best && best.coords.length > 1) found.push({ ...best, bearing });
+  }
+  if(!found.length) throw lastErr || new Error('No routes found here.');
+  onStatus('Reading the terrain…');
+  for(const c of found) Object.assign(c, await analyzeRoute(c.coords));
+  const score = c => {
+    const gain = c.ascent / (c.distance / 1000), err = Math.abs(c.distance - targetM) / targetM;
+    const t = terrain === 'flat' ? gain : terrain === 'hilly' ? -gain : Math.abs(gain - 12);
+    return t + c.overlap * 40 + err * 30;
+  };
+  return found.sort((a, b) => score(a) - score(b)).slice(0, 3);
+}
+
+/* =========================================================
+   Routes view: planner map, suggestions, saved routes
+   ========================================================= */
+const CAND_COLORS = ['#c8f43c', '#5ec8ff', '#ff8a3d', '#b18cff'];
+const plan = { mode: 'gps', pick: null, terrain: 'flat', cands: [], sel: 0, busy: false };
+let planMap = null, planMapReady = false, planMarker = null;
+const activeRoute = () => S.routes.find(r => r.id === S.activeRouteId) || null;
+const distUnit = () => S.settings.units === 'mi' ? 1609.344 : 1000;
+
+function openRoutesView(){
+  $('#rDistLbl').textContent = `Distance (${S.settings.units})`;
+  renderRouteLib(); renderStartInfo();
+  if(!planMap){
+    planMap = makeMap('planMap', $('#planMsg'));
+    if(!planMap) return;
+    planMap.on('load', () => {
+      try{
+        planMap.addSource('dem', { type:'raster-dem', tiles:[DEM_URL], encoding:'terrarium', tileSize:256, maxzoom:15,
+          attribution:'Elevation: <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank">Mapzen Terrain Tiles</a>' });
+        const firstSymbol = (planMap.getStyle().layers || []).find(l => l.type === 'symbol');
+        planMap.addLayer({ id:'hillshade', type:'hillshade', source:'dem', paint:{ 'hillshade-exaggeration': .35, 'hillshade-shadow-color':'#3b3b3b', 'hillshade-highlight-color':'#ffffff' } }, firstSymbol && firstSymbol.id);
+      }catch{}
+      planMap.addSource('cands', { type:'geojson', data: EMPTY_FC });
+      planMap.addLayer({ id:'cands-casing', type:'line', source:'cands', layout:{'line-join':'round','line-cap':'round'}, paint:{ 'line-color':'#111', 'line-width':['case',['get','sel'],9,5], 'line-opacity':['case',['get','sel'],.55,.25] } });
+      planMap.addLayer({ id:'cands-line', type:'line', source:'cands', layout:{'line-join':'round','line-cap':'round'}, paint:{ 'line-color':['get','color'], 'line-width':['case',['get','sel'],5,3], 'line-opacity':['case',['get','sel'],1,.55] } });
+      planMapReady = true; drawCands(); centerPlanner();
+    });
+    planMap.on('click', e => { if(plan.mode === 'pick'){ plan.pick = [e.lngLat.lng, e.lngLat.lat]; renderStartInfo(); } });
+    const el = document.createElement('div'); el.style.cssText = 'width:22px;height:22px;border-radius:50%;background:#fff;border:5px solid #141a00;box-shadow:0 2px 8px rgba(0,0,0,.5)';
+    planMarker = new maplibregl.Marker({ element: el, draggable: true });
+    planMarker.on('dragend', () => { const ll = planMarker.getLngLat(); plan.pick = [ll.lng, ll.lat]; setStartMode('pick'); });
+  } else setTimeout(() => planMap.resize(), 50);
+}
+function currentStart(){
+  if(plan.mode === 'home') return S.settings.home ? [S.settings.home.lon, S.settings.home.lat] : null;
+  if(plan.mode === 'pick') return plan.pick;
+  return lastFix ? [lastFix[0], lastFix[1]] : null;
+}
+function centerPlanner(){
+  const s = currentStart();
+  if(planMap && s && !plan.cands.length) planMap.jumpTo({ center: s, zoom: 14 });
+}
+function setStartMode(m){
+  plan.mode = m;
+  document.querySelectorAll('#startSeg button').forEach(b => b.classList.toggle('on', b.dataset.smode === m));
+  if(m === 'pick' && !plan.pick) plan.pick = currentStartFallback();
+  renderStartInfo(); centerPlanner();
+}
+function currentStartFallback(){ if(lastFix) return [lastFix[0], lastFix[1]]; if(S.settings.home) return [S.settings.home.lon, S.settings.home.lat]; if(planMap){ const c = planMap.getCenter(); return [c.lng, c.lat]; } return null; }
+function renderStartInfo(){
+  const s = currentStart(), info = $('#startInfo');
+  if(plan.mode === 'gps') info.textContent = s ? 'Starting where you are now' : 'Waiting for GPS…';
+  else if(plan.mode === 'home') info.textContent = s ? 'Starting from Home' : 'No Home saved yet. Choose Here or Pick on map, then tap “Save as Home”.';
+  else info.textContent = 'Tap the map or drag the pin to set the start';
+  $('#btnSetHome').classList.toggle('hidden', !s || plan.mode === 'home');
+  if(planMarker && planMap){ if(s) planMarker.setLngLat(s).addTo(planMap); else planMarker.remove(); }
+}
+document.querySelectorAll('#startSeg button').forEach(b => b.addEventListener('click', () => setStartMode(b.dataset.smode)));
+document.querySelectorAll('#terrSeg button').forEach(b => b.addEventListener('click', () => {
+  plan.terrain = b.dataset.terrain;
+  document.querySelectorAll('#terrSeg button').forEach(x => x.classList.toggle('on', x === b));
+}));
+$('#btnSetHome').addEventListener('click', async () => {
+  const s = currentStart(); if(!s) return;
+  S.settings.home = { lon: +s[0].toFixed(6), lat: +s[1].toFixed(6) };
+  await save('settings'); toast('Home saved'); setStartMode('home');
+});
+
+function drawCands(){
+  if(!planMapReady) return;
+  planMap.getSource('cands').setData({ type:'FeatureCollection', features: plan.cands.map((c, i) => ({ type:'Feature', properties:{ color: c.color || CAND_COLORS[i], sel: i === plan.sel }, geometry:{ type:'LineString', coordinates: c.coords } }))
+    .sort((a, b) => a.properties.sel - b.properties.sel) });
+}
+function fitPlanner(coordsList){
+  if(!planMap) return;
+  const all = coordsList.flat(); if(!all.length) return;
+  const b = all.reduce((bb, p) => bb.extend(p), new maplibregl.LngLatBounds(all[0], all[0]));
+  planMap.fitBounds(b, { padding: 30, maxZoom: 16, duration: 400 });
+}
+function profileSVG(profile, color = '#c8f43c', h = 46){
+  if(!profile || profile.length < 2) return '';
+  const W = 300, H = h, d0 = profile[0][0], d1 = profile[profile.length - 1][0] || 1;
+  let mn = Infinity, mx = -Infinity; profile.forEach(p => { mn = Math.min(mn, p[1]); mx = Math.max(mx, p[1]); });
+  const span = Math.max(mx - mn, 25), base = mn - (span - (mx - mn)) / 2;
+  const line = profile.map(p => `${((p[0] - d0) / (d1 - d0) * W).toFixed(1)},${(H - 3 - (p[1] - base) / span * (H - 8)).toFixed(1)}`).join(' ');
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:${H}px;display:block;margin-top:6px"><polygon points="0,${H} ${line} ${W},${H}" fill="${color}" opacity=".16"/><polyline points="${line}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
+    <div class="row tiny muted" style="justify-content:space-between"><span>${Math.round(mn)} m</span><span>elevation</span><span>${Math.round(mx)} m</span></div>`;
+}
+const routeStats = r => `${fmtDist(r.distance)} ${S.settings.units} · ↑${r.ascent} m ↓${r.descent} m · ${terrainLabel(r.ascent, r.distance)}`;
+function renderSuggestions(){
+  $('#suggestions').innerHTML = plan.cands.map((c, i) => `
+    <div class="cand ${i === plan.sel ? 'sel' : ''}" data-cand="${i}">
+      <div class="h"><i class="sw" style="background:${CAND_COLORS[i]}"></i><span style="flex:1">Option ${i + 1}</span><span class="small muted" style="font-weight:400">${c.overlap > .25 ? 'some out-and-back' : 'loop'}</span></div>
+      <div class="small muted" style="margin-top:2px">${routeStats(c)}</div>
+      ${profileSVG(c.profile, CAND_COLORS[i])}
+      <div class="controls" style="margin-top:8px"><button class="btn btn-ghost btn-sm" data-cand-save="${i}">Save</button><button class="btn btn-start btn-sm" data-cand-use="${i}">Save &amp; use for next run</button></div>
+    </div>`).join('');
+}
+$('#btnSuggest').addEventListener('click', async () => {
+  if(plan.busy) return;
+  const start = currentStart();
+  if(!start){ toast(plan.mode === 'home' ? 'Save a Home first' : 'Waiting for GPS: try Pick on map', 3200); return; }
+  const target = (parseFloat($('#rDist').value) || 5) * distUnit();
+  if(target < 500 || target > 60000){ toast('Choose a distance between 0.5 and 60 km'); return; }
+  plan.busy = true; const btn = $('#btnSuggest'); btn.disabled = true;
+  const status = m => { $('#suggestStatus').innerHTML = `<span class="spin"></span>${esc(m)}`; };
+  plan.cands = []; plan.sel = 0; renderSuggestions(); drawCands();
+  try{
+    const res = await suggestLoops(start, target, plan.terrain, status);
+    plan.cands = res.map((c, i) => ({ ...c, color: CAND_COLORS[i], start, terrain: plan.terrain }));
+    $('#suggestStatus').textContent = `${plan.cands.length} suggestion${plan.cands.length > 1 ? 's' : ''}, best match first. Tap one to highlight it.`;
+    renderSuggestions(); drawCands(); fitPlanner(plan.cands.map(c => c.coords));
+  }catch(e){
+    const msg = /Failed to fetch|NetworkError|Load failed/i.test(e.message) ? 'Couldn’t reach the routing or elevation service. Check your connection and try again.' : e.message;
+    $('#suggestStatus').innerHTML = `<span style="color:#ffb4bc">⚠ ${esc(msg)}</span>`;
+  }finally{ plan.busy = false; btn.disabled = false; }
+});
+async function saveCandidate(i, use){
+  const c = plan.cands[i]; if(!c) return;
+  const def = `${fmtDist(c.distance)} ${S.settings.units} ${terrainLabel(c.ascent, c.distance).toLowerCase()} loop · ${fmtDate(Date.now(), { day:'numeric', month:'short' })}`;
+  const r = await dialog({ title:'Save route', html:`<div class="field"><label>Name</label><input id="routeName" value="${esc(def)}" maxlength="60"></div>`, buttons:[{ label:'Cancel', value:false }, { label: use ? 'Save & use' : 'Save', value:true, cls:'btn-start' }] });
+  if(!r.value) return;
+  const route = { id: uid(), name: (r.input || def).trim() || def, created: Date.now(), start: { lon: c.start[0], lat: c.start[1] }, terrain: c.terrain,
+    distance: Math.round(c.distance), ascent: c.ascent, descent: c.descent, minEle: c.minEle, maxEle: c.maxEle, engine: c.engine,
+    coords: c.coords.map(p => [+p[0].toFixed(5), +p[1].toFixed(5)]), profile: c.profile };
+  S.routes.unshift(route);
+  if(use) S.activeRouteId = route.id;
+  await save('routes', 'activeRouteId');
+  renderRouteLib();
+  if(use){ setGuideFromActive(true); showView('run'); toast('Route selected: it’s on your Run map'); }
+  else toast('Route saved to My routes');
+}
+document.addEventListener('click', e => {
+  const s = e.target.closest('[data-cand-save],[data-cand-use]');
+  if(s){ e.stopPropagation(); saveCandidate(+(s.dataset.candSave ?? s.dataset.candUse), s.dataset.candUse != null); return; }
+  const c = e.target.closest('[data-cand]');
+  if(c){ plan.sel = +c.dataset.cand; renderSuggestions(); drawCands(); fitPlanner([plan.cands[plan.sel].coords]); }
+});
+
+function renderRouteLib(){
+  const lib = $('#routeLib');
+  if(!S.routes.length){ lib.innerHTML = '<h3>My routes</h3><p class="small muted" style="margin:0">Routes you save will appear here. Select one and it shows on the Run map as a dashed line, with the distance left as you go.</p>'; return; }
+  lib.innerHTML = '<h3>My routes</h3>' + S.routes.map(r => `
+    <div class="route-item">
+      <div class="top"><div class="info"><div class="n">${esc(r.name)}</div><div class="small muted">${routeStats(r)}</div></div>
+        ${r.id === S.activeRouteId ? '<span class="pill on">Selected</span>' : `<button class="go" data-route-use="${r.id}">Select</button>`}
+        <button class="menu-btn" data-route-menu="${r.id}" aria-label="Route options">⋯</button></div>
+      ${profileSVG(r.profile, r.id === S.activeRouteId ? '#c8f43c' : '#9aa3b5', 34)}
+    </div>`).join('');
+}
+async function selectRoute(id, goRun){
+  S.activeRouteId = id; await save('activeRouteId');
+  renderRouteLib(); setGuideFromActive(true);
+  if(goRun){ showView('run'); toast('Route selected'); }
+}
+document.addEventListener('click', async e => {
+  const u = e.target.closest('[data-route-use]');
+  if(u){ selectRoute(u.dataset.routeUse, true); return; }
+  const m = e.target.closest('[data-route-menu]');
+  if(!m) return;
+  const r = S.routes.find(x => x.id === m.dataset.routeMenu); if(!r) return;
+  const a = await dialog({ title: r.name, html:`<p class="small muted" style="margin:0">${routeStats(r)}</p>`, buttons:[
+    { label: r.id === S.activeRouteId ? 'Unselect' : 'Select for runs', value:'use' }, { label:'Show on map', value:'show' }, { label:'Rename', value:'rename' },
+    { label:'Export GPX', value:'gpx' }, { label:'Delete', value:'del', cls:'btn-stop' }, { label:'Cancel', value:null } ] });
+  if(a.value === 'use'){ if(r.id === S.activeRouteId){ S.activeRouteId = null; await save('activeRouteId'); renderRouteLib(); setGuideFromActive(); } else selectRoute(r.id, true); }
+  else if(a.value === 'show'){
+    plan.cands = [{ ...r, color:'#c8f43c' }]; plan.sel = 0; $('#suggestions').innerHTML = ''; $('#suggestStatus').textContent = `Showing “${r.name}”.`;
+    drawCands(); fitPlanner([r.coords]); $('#planMap').scrollIntoView({ behavior:'smooth', block:'center' });
+  }
+  else if(a.value === 'rename'){
+    const n = await dialog({ title:'Rename route', html:`<div class="field"><label>Name</label><input value="${esc(r.name)}" maxlength="60"></div>`, buttons:[{ label:'Cancel', value:false }, { label:'Save', value:true, cls:'btn-start' }] });
+    if(n.value && n.input.trim()){ r.name = n.input.trim(); await save('routes'); renderRouteLib(); updateRouteChip(); }
+  }
+  else if(a.value === 'gpx'){
+    const pts = r.coords.map(p => `<trkpt lat="${p[1]}" lon="${p[0]}"/>`).join('');
+    download(`<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Running Mate" xmlns="http://www.topografix.com/GPX/1/1"><trk><name>${esc(r.name)}</name><type>running</type><trkseg>${pts}</trkseg></trk></gpx>`, `route-${r.name.replace(/[^\w-]+/g, '-').slice(0, 40)}.gpx`, 'application/gpx+xml');
+  }
+  else if(a.value === 'del'){
+    const c = await dialog({ title:'Delete route?', html:`<p class="small muted" style="margin:0">“${esc(r.name)}” will be removed. Runs that used it keep their own GPS path.</p>`, buttons:[{ label:'Cancel', value:false }, { label:'Delete', value:true, cls:'btn-stop' }] });
+    if(c.value){ S.routes = S.routes.filter(x => x.id !== r.id); if(S.activeRouteId === r.id) S.activeRouteId = null; await save('routes', 'activeRouteId'); renderRouteLib(); setGuideFromActive(); }
+  }
+});
+
+/* ---- Selected route on the Run map: dashed guide + distance left ---- */
+let guideCache = null;
+function addGuideLayer(m){
+  if(m.getSource('guide')) return;
+  m.addSource('guide', { type:'geojson', data: EMPTY_FC });
+  m.addLayer({ id:'guide-line', type:'line', source:'guide', layout:{'line-join':'round','line-cap':'round'},
+    paint:{ 'line-color':'#ffffff', 'line-width':4, 'line-opacity':.6, 'line-dasharray':[1.2, 1.6] } }, m.getLayer('route-casing') ? 'route-casing' : undefined);
+}
+function setGuideFromActive(fit){
+  const r = activeRoute();
+  if(r){
+    const dense = resample(r.coords, 10);
+    guideCache = { id: r.id, pts: dense, total: dense[dense.length - 1][2], idx: 0 };
+  } else guideCache = null;
+  drawGuide(); updateRouteChip();
+  if(fit && r && map){ follow = false; const b = r.coords.reduce((bb, p) => bb.extend(p), new maplibregl.LngLatBounds(r.coords[0], r.coords[0])); setTimeout(() => { map.resize(); map.fitBounds(b, { padding: 40, maxZoom: 16, duration: 0 }); }, 80); }
+}
+function drawGuide(){ if(mapReady && map.getSource('guide')){ const r = activeRoute(); map.getSource('guide').setData(r ? lineFC(r.coords) : EMPTY_FC); } }
+function updateRouteChip(pt){
+  const r = activeRoute(), chip = $('#routeChip');
+  if(!r){ chip.classList.add('hidden'); return; }
+  chip.classList.remove('hidden');
+  let text = `🗺 ${r.name} · ${fmtDist(r.distance)} ${S.settings.units} · ↑${r.ascent} m`;
+  if(pt && guideCache && run.status === 'running'){
+    const g = guideCache, to = Math.min(g.pts.length - 1, g.idx + 80);
+    let best = Infinity, bi = g.idx;
+    for(let i = g.idx; i <= to; i++){ const d = hav(g.pts[i], pt); if(d < best){ best = d; bi = i; } }
+    if(best <= 60) g.idx = bi;
+    const left = Math.max(0, g.total - g.pts[g.idx][2]);
+    text = best > 60 ? `🗺 ⚠ Off route (${Math.round(best)} m away) · ${fmtDist(left)} ${S.settings.units} left` : `🗺 ${fmtDist(left)} ${S.settings.units} to go · ${r.name}`;
+  }
+  $('#routeChipText').textContent = text;
+}
+$('#routeChipX').addEventListener('click', async () => { S.activeRouteId = null; await save('activeRouteId'); setGuideFromActive(); renderRouteLib(); });
 
 /* =========================================================
    Install as an app (PWA)
@@ -1458,9 +1913,10 @@ if(isServed && 'serviceWorker' in navigator){
   initMap();
   restoreLive();
   startGps();
+  setGuideFromActive();
   updateButtons(); renderPhase(); tick(); renderPlan(); renderInstall();
   const startView = location.hash.slice(1); // app shortcuts: #plan, #history
-  if(['plan','history','settings'].includes(startView)) showView(startView);
+  if(['plan','routes','history','settings'].includes(startView)) showView(startView);
   window.addEventListener('pagehide', persistLive);
 })();
 </script>

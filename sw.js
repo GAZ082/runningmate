@@ -2,12 +2,12 @@
    - App files: network first (so updates arrive), cached copy when offline.
    - Map style/tiles/fonts: cache first, so areas you've already seen still show offline.
    Bump VERSION when you change the app files. */
-const VERSION = 'rm-20261105-1323';
+const VERSION = 'rm-20261105-1340';
 const APP_CACHE = `${VERSION}-app`;
 const MAP_CACHE = 'rm-map';           // kept across versions
 const MAP_MAX_ENTRIES = 3000;
 const APP_FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png'];
-const MAP_HOSTS = ['tiles.openfreemap.org', 'api.maptiler.com'];
+const MAP_HOSTS = ['tiles.openfreemap.org', 'api.maptiler.com', 's3.amazonaws.com']; // s3 = elevation tiles
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(APP_CACHE).then(c => c.addAll(APP_FILES)).then(() => self.skipWaiting()));
